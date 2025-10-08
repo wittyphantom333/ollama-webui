@@ -248,10 +248,15 @@
             <div class="card">
                 <div class="card-body">
                     <h5 class="card-title">Generation Options</h5>
-                    
+
+                    <div class="mb-3">
+                        <label for="model-filter" class="form-label">Filter models</label>
+                        <input type="text" class="form-control" id="model-filter" placeholder="Type to filter...">
+                    </div>
+
                     <div class="mb-3">
                         <label for="model-select" class="form-label">Model</label>
-                        <select class="form-select" id="model-select">
+                        <select class="form-select" id="model-select" size="5">
                             <option value="" disabled selected>Select a model</option>
                             {% for model in models %}
                             <option value="{{ model.name }}" {% if request.args.get('model') == model.name %}selected{% endif %}>{{ model.name }}</option>
@@ -429,12 +434,39 @@
     document.addEventListener('DOMContentLoaded', function() {
         // Main UI elements
         const modelSelect = document.getElementById('model-select');
+        const modelFilter = document.getElementById('model-filter');
         const promptInput = document.getElementById('prompt-input');
         const systemPrompt = document.getElementById('system-prompt');
         const generateButton = document.getElementById('generate-button');
         const resultContainer = document.getElementById('result-container');
         const resultLoading = document.getElementById('result-loading');
         const statsContainer = document.getElementById('stats-container');
+
+        // Store all model options for filtering
+        const allModelOptions = Array.from(modelSelect.options).filter(opt => opt.value !== '');
+
+        // Model filter functionality
+        modelFilter.addEventListener('input', function() {
+            const filterText = this.value.toLowerCase();
+            const defaultOption = modelSelect.options[0];
+
+            // Clear all options except the default one
+            modelSelect.innerHTML = '';
+            modelSelect.add(defaultOption);
+
+            // Add filtered options
+            allModelOptions.forEach(option => {
+                if (option.textContent.toLowerCase().includes(filterText)) {
+                    modelSelect.add(option.cloneNode(true));
+                }
+            });
+
+            // If there's only one match (besides default), select it
+            if (modelSelect.options.length === 2 && filterText !== '') {
+                modelSelect.selectedIndex = 1;
+                modelSelect.dispatchEvent(new Event('change'));
+            }
+        });
         
         // Parameter tuning elements
         const presetSelect = document.getElementById('preset-select');

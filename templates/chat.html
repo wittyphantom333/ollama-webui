@@ -101,8 +101,12 @@
                 <div class="card-body">
                     <h5 class="card-title">Model Selection</h5>
                     <div class="mb-3">
+                        <label for="model-filter" class="form-label">Filter models</label>
+                        <input type="text" class="form-control" id="model-filter" placeholder="Type to filter...">
+                    </div>
+                    <div class="mb-3">
                         <label for="model-select" class="form-label">Choose a model</label>
-                        <select class="form-select" id="model-select">
+                        <select class="form-select" id="model-select" size="5">
                             <option value="" disabled selected>Select a model</option>
                             {% for model in models %}
                             <option value="{{ model.name }}" {% if request.args.get('model') == model.name %}selected{% endif %}>{{ model.name }}</option>
@@ -142,13 +146,40 @@
 <script>
     document.addEventListener('DOMContentLoaded', function() {
         const modelSelect = document.getElementById('model-select');
+        const modelFilter = document.getElementById('model-filter');
         const chatMessages = document.getElementById('chat-messages');
         const messageInput = document.getElementById('message-input');
         const sendButton = document.getElementById('send-button');
         const clearChatButton = document.getElementById('clear-chat');
-        
+
         let conversation = [];
         let isProcessing = false;
+
+        // Store all model options for filtering
+        const allModelOptions = Array.from(modelSelect.options).filter(opt => opt.value !== '');
+
+        // Model filter functionality
+        modelFilter.addEventListener('input', function() {
+            const filterText = this.value.toLowerCase();
+            const defaultOption = modelSelect.options[0];
+
+            // Clear all options except the default one
+            modelSelect.innerHTML = '';
+            modelSelect.add(defaultOption);
+
+            // Add filtered options
+            allModelOptions.forEach(option => {
+                if (option.textContent.toLowerCase().includes(filterText)) {
+                    modelSelect.add(option.cloneNode(true));
+                }
+            });
+
+            // If there's only one match (besides default), select it
+            if (modelSelect.options.length === 2 && filterText !== '') {
+                modelSelect.selectedIndex = 1;
+                modelSelect.dispatchEvent(new Event('change'));
+            }
+        });
         
         // Enable input when model is selected
         modelSelect.addEventListener('change', function() {
