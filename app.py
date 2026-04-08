@@ -1,4 +1,5 @@
 from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, Response
+from flask_login import LoginManager, login_required, current_user
 import requests
 import json
 import os
@@ -11,17 +12,45 @@ load_dotenv()
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-key-change-in-production')
+app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'sqlite:///vivus.db')
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 csrf = CSRFProtect(app)
+
+# Database and login
+from models import db, User
+db.init_app(app)
+
+login_manager = LoginManager(app)
+login_manager.login_view = 'auth.login'
+login_manager.login_message_category = 'info'
+
+@login_manager.user_loader
+def load_user(user_id):
+    return User.query.get(int(user_id))
+
+# Register blueprints
+from auth import auth_bp
+from api_routes import api_bp
+app.register_blueprint(auth_bp)
+app.register_blueprint(api_bp)
+
+# Exempt proxy-facing API endpoints from CSRF (they use API keys)
+csrf.exempt(api_bp)
+
+# Create tables on first run
+with app.app_context():
+    db.create_all()
 
 # Ollama API base URL
 OLLAMA_API_BASE = os.getenv('OLLAMA_API_BASE', 'http://127.0.0.1:11434')
 OLLAMA_API_URL = f"{OLLAMA_API_BASE}/api"
 
 # App configuration
-PORT = int(os.getenv('PORT', 5000))
+PORT = int(os.getenv('PORT', 5050))
 HOST = os.getenv('HOST', '127.0.0.1')
 
 @app.route('/')
+@login_required
 def index():
     current_version = "Unknown"
     # Get current version from Ollama API
@@ -35,6 +64,7 @@ def index():
     return render_template('index.html', version=current_version)
 
 @app.route('/models')
+@login_required
 def models():
     try:
         from datetime import datetime
@@ -93,6 +123,7 @@ def models():
         return render_template('models.html', models=[], sort_by='name', sort_order='asc')
 
 @app.route('/models/<path:model_name>')
+@login_required
 def model_detail(model_name):
     try:
         response = requests.post(f"{OLLAMA_API_URL}/show", json={"model": model_name})
@@ -107,6 +138,7 @@ def model_detail(model_name):
         return redirect(url_for('models'))
 
 @app.route('/models/delete/<path:model_name>', methods=['POST'])
+@login_required
 def delete_model(model_name):
     try:
         response = requests.delete(f"{OLLAMA_API_URL}/delete", json={"model": model_name})
@@ -119,6 +151,7 @@ def delete_model(model_name):
     return redirect(url_for('models'))
 
 @app.route('/models/update/<path:model_name>')
+@login_required
 def update_model(model_name):
     try:
         # Re-pull the model to get the latest version
@@ -132,6 +165,7 @@ def update_model(model_name):
     return redirect(url_for('models'))
 
 @app.route('/pull', methods=['GET', 'POST'])
+@login_required
 def pull_model():
     if request.method == 'POST':
         model_name = request.form.get('model_name')
@@ -148,6 +182,7 @@ def pull_model():
     return render_template('pull_model.html')
 
 @app.route('/create', methods=['GET'])
+@login_required
 def create_model_page():
     try:
         response = requests.get(f"{OLLAMA_API_URL}/tags")
@@ -162,6 +197,7 @@ def create_model_page():
         return render_template('create_model.html', models=[])
 
 @app.route('/create-model', methods=['GET', 'POST'])
+@login_required
 def create_model():
     # For GET requests, redirect to the create model page
     if request.method == 'GET':
@@ -276,6 +312,7 @@ def stream_create_model(payload):
         yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
 @app.route('/running-models')
+@login_required
 def running_models():
     try:
         from datetime import datetime
@@ -325,6 +362,7 @@ def running_models():
         return render_template('running_models.html', models=[])
 
 @app.route('/models/unload/<path:model_name>', methods=['POST'])
+@login_required
 def unload_model(model_name):
     try:
         # Unload model by setting keep_alive to 0
@@ -345,6 +383,7 @@ def unload_model(model_name):
     return redirect(url_for('running_models'))
 
 @app.route('/chat')
+@login_required
 def chat():
     # Get available models for the dropdown
     try:
@@ -360,6 +399,7 @@ def chat():
         return render_template('chat.html', models=[])
 
 @app.route('/api/chat', methods=['POST'])
+@login_required
 def api_chat():
     data = request.get_json()
     model = data.get('model')
@@ -430,6 +470,7 @@ def stream_chat_response(model, messages):
     return app.response_class(generate(), mimetype='text/event-stream')
 
 @app.route('/generate')
+@login_required
 def generate():
     # Get available models for the dropdown
     try:
@@ -445,6 +486,7 @@ def generate():
         return render_template('generate.html', models=[])
 
 @app.route('/api/generate', methods=['POST'])
+@login_required
 def api_generate():
     data = request.get_json()
     model = data.get('model')
@@ -503,6 +545,7 @@ def api_generate():
         return jsonify({"error": f"Error connecting to Ollama API: {str(e)}"}), 500
 
 @app.route('/help')
+@login_required
 def help_page():
     return render_template('help.html')
 
@@ -511,10 +554,12 @@ def model_help():
     return render_template('model_help.html')
 
 @app.route('/about')
+@login_required
 def about():
     return render_template('about.html')
 
 @app.route('/version')
+@login_required
 def version():
     current_version = "Unknown"
     latest_version = "Unknown"

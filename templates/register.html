@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Register — Vivus{% endblock %}
+{% block content %}
+<div class="row justify-content-center mt-5">
+    <div class="col-md-5">
+        <div class="card">
+            <div class="card-header">
+                <i class="fas fa-user-plus me-2"></i>
+                {% if first_user %}Create Admin Account{% else %}Register{% endif %}
+            </div>
+            <div class="card-body">
+                {% if first_user %}
+                <div class="alert alert-info">
+                    <i class="fas fa-info-circle me-1"></i>
+                    No users yet — this account will be the administrator.
+                </div>
+                {% endif %}
+                <form method="POST">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <div class="mb-3">
+                        <label for="username" class="form-label">Username</label>
+                        <input type="text" class="form-control" id="username" name="username" required minlength="3" autofocus>
+                    </div>
+                    <div class="mb-3">
+                        <label for="email" class="form-label">Email</label>
+                        <input type="email" class="form-control" id="email" name="email" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="password" class="form-label">Password</label>
+                        <input type="password" class="form-control" id="password" name="password" required minlength="8">
+                    </div>
+                    <div class="mb-3">
+                        <label for="confirm_password" class="form-label">Confirm Password</label>
+                        <input type="password" class="form-control" id="confirm_password" name="confirm_password" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100">
+                        {% if first_user %}Create Admin{% else %}Register{% endif %}
+                    </button>
+                </form>
+                <p class="text-center mt-3 mb-0">
+                    <a href="{{ url_for('auth.login') }}">Already have an account? Login</a>
+                </p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

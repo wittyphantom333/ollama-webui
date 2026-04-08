@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}Usage — Vivus{% endblock %}
+{% block content %}
+<h2><i class="fas fa-chart-bar me-2"></i>Usage Dashboard</h2>
+
+<!-- Summary cards -->
+<div class="row mb-4">
+    <div class="col-md-3">
+        <div class="card text-center">
+            <div class="card-body">
+                <h5 class="card-title text-muted">Requests</h5>
+                <h2>{{ "{:,}".format(totals.requests) }}</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-center">
+            <div class="card-body">
+                <h5 class="card-title text-muted">Prompt Tokens</h5>
+                <h2>{{ "{:,}".format(totals.prompt) }}</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-center">
+            <div class="card-body">
+                <h5 class="card-title text-muted">Completion Tokens</h5>
+                <h2>{{ "{:,}".format(totals.completion) }}</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-center">
+            <div class="card-body">
+                <h5 class="card-title text-muted">Total Tokens</h5>
+                <h2>{{ "{:,}".format(totals.total) }}</h2>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% if per_user %}
+<!-- Admin: per-user breakdown -->
+<div class="card mb-4">
+    <div class="card-header">Per-User Breakdown</div>
+    <div class="table-responsive">
+        <table class="table table-hover mb-0">
+            <thead>
+                <tr><th>User ID</th><th>Requests</th><th>Total Tokens</th></tr>
+            </thead>
+            <tbody>
+                {% for row in per_user %}
+                <tr>
+                    <td>{{ row.user_id }}</td>
+                    <td>{{ "{:,}".format(row.requests) }}</td>
+                    <td>{{ "{:,}".format(row.total_tokens) }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+<!-- Recent requests -->
+<div class="card">
+    <div class="card-header">Recent Requests (last 50)</div>
+    <div class="table-responsive">
+        <table class="table table-hover mb-0">
+            <thead>
+                <tr>
+                    <th>Time</th>
+                    <th>Model</th>
+                    <th>Tier</th>
+                    <th>Prompt</th>
+                    <th>Completion</th>
+                    <th>Total</th>
+                    <th>Duration</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in recent %}
+                <tr>
+                    <td>{{ r.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                    <td><code>{{ r.model }}</code></td>
+                    <td><span class="badge bg-{% if r.tier == 'fast' %}info{% elif r.tier == 'strong' %}warning{% else %}primary{% endif %}">{{ r.tier }}</span></td>
+                    <td>{{ "{:,}".format(r.prompt_tokens) }}</td>
+                    <td>{{ "{:,}".format(r.completion_tokens) }}</td>
+                    <td>{{ "{:,}".format(r.total_tokens) }}</td>
+                    <td>{{ "%.1f"|format(r.duration_ms / 1000) }}s</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="7" class="text-center text-muted">No usage data yet.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

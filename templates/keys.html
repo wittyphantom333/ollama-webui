@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}API Keys — Vivus{% endblock %}
+{% block content %}
+<h2><i class="fas fa-key me-2"></i>API Keys</h2>
+<p class="text-muted">Use these keys in your <code>vivus.sh</code> or any OpenAI-compatible client.</p>
+
+<div class="card mb-4">
+    <div class="card-header">Create New Key</div>
+    <div class="card-body">
+        <form method="POST" class="row g-3 align-items-end">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="col-auto">
+                <label for="key_name" class="form-label">Key Name</label>
+                <input type="text" class="form-control" id="key_name" name="key_name" placeholder="e.g. laptop, server" value="default">
+            </div>
+            <div class="col-auto">
+                <button type="submit" class="btn btn-primary"><i class="fas fa-plus me-1"></i>Generate Key</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">Your Keys</div>
+    <div class="table-responsive">
+        <table class="table table-hover mb-0">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Key</th>
+                    <th>Status</th>
+                    <th>Created</th>
+                    <th>Last Used</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for key in keys %}
+                <tr{% if not key.is_active %} class="text-muted"{% endif %}>
+                    <td>{{ key.name }}</td>
+                    <td><code>{{ key.key_prefix }}</code></td>
+                    <td>
+                        {% if key.is_active %}
+                        <span class="badge bg-success">Active</span>
+                        {% else %}
+                        <span class="badge bg-secondary">Revoked</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ key.created_at.strftime('%Y-%m-%d') }}</td>
+                    <td>{{ key.last_used_at.strftime('%Y-%m-%d %H:%M') if key.last_used_at else 'Never' }}</td>
+                    <td>
+                        {% if key.is_active %}
+                        <form method="POST" action="{{ url_for('api.revoke_key', key_id=key.id) }}" style="display:inline"
+                              onsubmit="return confirm('Revoke this key? This cannot be undone.')">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <button type="submit" class="btn btn-sm btn-outline-danger">Revoke</button>
+                        </form>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="6" class="text-center text-muted">No API keys yet.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
