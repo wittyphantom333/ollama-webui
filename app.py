@@ -429,7 +429,7 @@ def api_chat():
         response = requests.post(
             f"{OLLAMA_API_URL}/chat",
             headers=ollama_headers(),
-            json={"model": model, "messages": messages, "stream": False}
+            json={"model": model, "messages": messages, "stream": False, "keep_alive": -1}
         )
         
         if response.status_code == 200:
@@ -453,7 +453,7 @@ def stream_chat_response(model, messages):
             response = requests.post(
                 f"{OLLAMA_API_URL}/chat",
                 headers=ollama_headers(),
-                json={"model": model, "messages": messages, "stream": True},
+                json={"model": model, "messages": messages, "stream": True, "keep_alive": -1},
                 stream=True
             )
             
@@ -512,7 +512,8 @@ def api_generate():
     payload = {
         "model": model,
         "prompt": prompt,
-        "stream": False
+        "stream": False,
+        "keep_alive": -1
     }
     
     if system:
