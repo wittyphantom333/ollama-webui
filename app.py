@@ -45,6 +45,17 @@ with app.app_context():
 OLLAMA_API_BASE = os.getenv('OLLAMA_API_BASE', 'http://127.0.0.1:11434')
 OLLAMA_API_URL = f"{OLLAMA_API_BASE}/api"
 
+def ollama_headers():
+    """Return headers for Ollama API requests, injecting the cloud token when configured."""
+    try:
+        from models import SiteSettings
+        token = SiteSettings.get('ollama_token')
+        if token:
+            return {'Authorization': f'Bearer {token}'}
+    except Exception:
+        pass
+    return {}
+
 # App configuration
 PORT = int(os.getenv('PORT', 5050))
 HOST = os.getenv('HOST', '127.0.0.1')
@@ -55,7 +66,7 @@ def index():
     current_version = "Unknown"
     # Get current version from Ollama API
     try:
-        response = requests.get(f"{OLLAMA_API_URL}/version")
+        response = requests.get(f"{OLLAMA_API_URL}/version", headers=ollama_headers())
         if response.status_code == 200:
             version_data = response.json()
             current_version = version_data.get('version', 'Unknown')
@@ -69,7 +80,7 @@ def models():
     try:
         from datetime import datetime
         
-        response = requests.get(f"{OLLAMA_API_URL}/tags")
+        response = requests.get(f"{OLLAMA_API_URL}/tags", headers=ollama_headers())
         if response.status_code == 200:
             models_data = response.json()
             models_list = models_data.get('models', [])
@@ -126,7 +137,7 @@ def models():
 @login_required
 def model_detail(model_name):
     try:
-        response = requests.post(f"{OLLAMA_API_URL}/show", json={"model": model_name})
+        response = requests.post(f"{OLLAMA_API_URL}/show", headers=ollama_headers(), json={"model": model_name})
         if response.status_code == 200:
             model_info = response.json()
             return render_template('model_detail.html', model=model_info, model_name=model_name)
@@ -141,7 +152,7 @@ def model_detail(model_name):
 @login_required
 def delete_model(model_name):
     try:
-        response = requests.delete(f"{OLLAMA_API_URL}/delete", json={"model": model_name})
+        response = requests.delete(f"{OLLAMA_API_URL}/delete", headers=ollama_headers(), json={"model": model_name})
         if response.status_code == 200:
             flash(f"Model {model_name} deleted successfully", "success")
         else:
@@ -155,7 +166,7 @@ def delete_model(model_name):
 def update_model(model_name):
     try:
         # Re-pull the model to get the latest version
-        response = requests.post(f"{OLLAMA_API_URL}/pull", json={"model": model_name, "stream": False})
+        response = requests.post(f"{OLLAMA_API_URL}/pull", headers=ollama_headers(), json={"model": model_name, "stream": False})
         if response.status_code == 200:
             flash(f"Model {model_name} updated successfully", "success")
         else:
@@ -170,7 +181,7 @@ def pull_model():
     if request.method == 'POST':
         model_name = request.form.get('model_name')
         try:
-            response = requests.post(f"{OLLAMA_API_URL}/pull", json={"model": model_name, "stream": False})
+            response = requests.post(f"{OLLAMA_API_URL}/pull", headers=ollama_headers(), json={"model": model_name, "stream": False})
             if response.status_code == 200:
                 flash(f"Model {model_name} pulled successfully", "success")
             else:
@@ -185,7 +196,7 @@ def pull_model():
 @login_required
 def create_model_page():
     try:
-        response = requests.get(f"{OLLAMA_API_URL}/tags")
+        response = requests.get(f"{OLLAMA_API_URL}/tags", headers=ollama_headers())
         if response.status_code == 200:
             models_data = response.json()
             return render_template('create_model.html', models=models_data.get('models', []))
@@ -268,7 +279,7 @@ def create_model():
             return Response(stream_create_model(payload), mimetype='text/event-stream')
         else:
             # Call Ollama API to create the model (non-streaming)
-            response = requests.post(f"{OLLAMA_API_URL}/create", json=payload)
+            response = requests.post(f"{OLLAMA_API_URL}/create", headers=ollama_headers(), json=payload)
             
             if response.status_code == 200:
                 flash(f"Model {model_name} created successfully", "success")
@@ -286,6 +297,7 @@ def stream_create_model(payload):
         # Make streaming request to Ollama API
         response = requests.post(
             f"{OLLAMA_API_URL}/create",
+            headers=ollama_headers(),
             json=payload,
             stream=True
         )
@@ -317,7 +329,7 @@ def running_models():
     try:
         from datetime import datetime
         
-        response = requests.get(f"{OLLAMA_API_URL}/ps")
+        response = requests.get(f"{OLLAMA_API_URL}/ps", headers=ollama_headers())
         if response.status_code == 200:
             models_data = response.json()
             models = models_data.get('models', [])
@@ -371,7 +383,7 @@ def unload_model(model_name):
             "prompt": "",
             "keep_alive": "0"
         }
-        response = requests.post(f"{OLLAMA_API_URL}/generate", json=payload)
+        response = requests.post(f"{OLLAMA_API_URL}/generate", headers=ollama_headers(), json=payload)
 
         if response.status_code == 200:
             flash(f"Model {model_name} unloaded successfully", "success")
@@ -387,7 +399,7 @@ def unload_model(model_name):
 def chat():
     # Get available models for the dropdown
     try:
-        response = requests.get(f"{OLLAMA_API_URL}/tags")
+        response = requests.get(f"{OLLAMA_API_URL}/tags", headers=ollama_headers())
         if response.status_code == 200:
             models_data = response.json()
             return render_template('chat.html', models=models_data.get('models', []))
@@ -415,7 +427,8 @@ def api_chat():
     
     try:
         response = requests.post(
-            f"{OLLAMA_API_URL}/chat", 
+            f"{OLLAMA_API_URL}/chat",
+            headers=ollama_headers(),
             json={"model": model, "messages": messages, "stream": False}
         )
         
@@ -439,6 +452,7 @@ def stream_chat_response(model, messages):
             # Make streaming request to Ollama API
             response = requests.post(
                 f"{OLLAMA_API_URL}/chat",
+                headers=ollama_headers(),
                 json={"model": model, "messages": messages, "stream": True},
                 stream=True
             )
@@ -474,7 +488,7 @@ def stream_chat_response(model, messages):
 def generate():
     # Get available models for the dropdown
     try:
-        response = requests.get(f"{OLLAMA_API_URL}/tags")
+        response = requests.get(f"{OLLAMA_API_URL}/tags", headers=ollama_headers())
         if response.status_code == 200:
             models_data = response.json()
             return render_template('generate.html', models=models_data.get('models', []))
@@ -534,7 +548,7 @@ def api_generate():
             payload["options"] = processed_options
     
     try:
-        response = requests.post(f"{OLLAMA_API_URL}/generate", json=payload)
+        response = requests.post(f"{OLLAMA_API_URL}/generate", headers=ollama_headers(), json=payload)
         
         if response.status_code == 200:
             result = response.json()
@@ -569,7 +583,7 @@ def version():
 
     # Get current version from Ollama API
     try:
-        response = requests.get(f"{OLLAMA_API_URL}/version")
+        response = requests.get(f"{OLLAMA_API_URL}/version", headers=ollama_headers())
         if response.status_code == 200:
             version_data = response.json()
             current_version = version_data.get('version', 'Unknown')
@@ -642,7 +656,7 @@ def check_updates():
         # Get current version
         current_version = "Unknown"
         try:
-            response = requests.get(f"{OLLAMA_API_URL}/version")
+            response = requests.get(f"{OLLAMA_API_URL}/version", headers=ollama_headers())
             if response.status_code == 200:
                 version_data = response.json()
                 current_version = version_data.get('version', 'Unknown')

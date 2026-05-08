@@ -3,44 +3,77 @@
 {% block title %}WebOllama - Pull Model{% endblock %}
 
 {% block content %}
-<div class="container">
-    <div class="row mb-4">
-        <div class="col-12">
-            <h1>Pull Model</h1>
-        </div>
-    </div>
+<h1>Pull Model</h1>
 
-    <div class="row">
-        <div class="col-md-8 offset-md-2">
-            <div class="card">
-                <div class="card-body">
-                    <form method="POST" action="/pull">
+<div class="row">
+    <div class="col-md-8 offset-md-2">
+        <div class="card mb-4">
+            <div class="card-body">
+                <form method="POST" action="/pull">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <div class="mb-3">
+                        <label for="model_name" class="form-label">Model Name</label>
+                        <input
+                            type="text"
+                            class="form-control"
+                            id="model_name"
+                            name="model_name"
+                            placeholder="e.g., llama3.2, mistral:latest, qwen3-coder:480b-cloud"
+                            required
+                        >
+                        <div class="form-text">
+                            Enter any model from the <a href="https://ollama.com/library" target="_blank" rel="noopener">Ollama library</a>, including cloud models.
+                        </div>
+                    </div>
+                    <div class="alert alert-info">
+                        <i class="fas fa-info-circle me-2"></i>Pull operations may take some time depending on model size and your internet connection.
+                    </div>
+                    <div class="d-flex justify-content-between">
+                        <a href="/models" class="btn btn-secondary">Cancel</a>
+                        <button type="submit" class="btn btn-primary">
+                            <i class="fas fa-download me-2"></i>Pull Model
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Ollama Cloud Models -->
+        <div class="card">
+            <div class="card-header fw-semibold">
+                <i class="fas fa-cloud me-2"></i>Ollama Cloud Models
+                <span class="text-muted fw-normal small ms-2">Run large models on Ollama's datacenter hardware</span>
+            </div>
+            <div class="list-group list-group-flush">
+                {% set cloud_models = [
+                    ('qwen3-coder:480b-cloud', 'Qwen3 Coder 480B', 'Best-in-class coding model'),
+                    ('gpt-oss:120b-cloud', 'GPT-OSS 120B', 'Large general-purpose model'),
+                    ('gpt-oss:20b-cloud', 'GPT-OSS 20B', 'Fast general-purpose model'),
+                    ('deepseek-v3.1:671b-cloud', 'DeepSeek V3.1 671B', 'Flagship reasoning model'),
+                    ('deepseek-v4-pro:cloud', 'DeepSeek V4 Pro', 'Latest DeepSeek model'),
+                    ('gemma4:31b', 'Gemma 4 31B', 'Google — MTP speculative decoding on Mac'),
+                ] %}
+                {% for model_id, label, desc in cloud_models %}
+                <div class="list-group-item d-flex align-items-center justify-content-between py-3">
+                    <div>
+                        <div class="fw-semibold">{{ label }}</div>
+                        <div class="text-muted small">{{ desc }}</div>
+                        <code class="small text-muted">{{ model_id }}</code>
+                    </div>
+                    <form method="POST" action="/pull" class="ms-3 flex-shrink-0">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                        <div class="mb-3">
-                            <label for="model_name" class="form-label">Model Name</label>
-                            <input 
-                                type="text" 
-                                class="form-control" 
-                                id="model_name" 
-                                name="model_name" 
-                                placeholder="e.g., llama3.2, llama2:13b, mistral:latest"
-                                required
-                            >
-                            <div class="form-text">
-                                Enter the name of the model you want to pull from the Ollama library.
-                            </div>
-                        </div>
-                        <div class="alert alert-info">
-                            <i class="fas fa-info-circle me-2"></i> Pull operations may take some time depending on the model size and your internet connection.
-                        </div>
-                        <div class="d-flex justify-content-between">
-                            <a href="/models" class="btn btn-secondary">Cancel</a>
-                            <button type="submit" class="btn btn-primary">
-                                <i class="fas fa-download me-2"></i> Pull Model
-                            </button>
-                        </div>
+                        <input type="hidden" name="model_name" value="{{ model_id }}">
+                        <button type="submit" class="btn btn-sm btn-primary">
+                            <i class="fas fa-download me-1"></i>Pull
+                        </button>
                     </form>
                 </div>
+                {% endfor %}
+            </div>
+            <div class="card-footer text-muted small">
+                <i class="fas fa-info-circle me-1"></i>
+                Cloud models require an Ollama account. Configure your token in
+                {% if current_user.is_admin %}<a href="/admin/settings">Settings</a>{% else %}Settings (admin only){% endif %}.
             </div>
         </div>
     </div>

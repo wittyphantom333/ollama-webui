@@ -455,38 +455,22 @@ def admin_settings():
             SiteSettings.set('signup_enabled', 'true' if signup_enabled else 'false')
             flash('Settings saved.', 'success')
 
-        elif action == 'add_provider':
-            name = request.form.get('provider_name', '').strip()
-            provider = request.form.get('provider_type', '').strip()
-            api_key_val = request.form.get('api_key', '').strip()
-            base_url = request.form.get('base_url', '').strip() or None
-
-            if not name or not provider or not api_key_val:
-                flash('Name, provider type, and API key are all required.', 'danger')
+        elif action == 'save_ollama_token':
+            token = request.form.get('ollama_token', '').strip()
+            if token:
+                SiteSettings.set('ollama_token', token)
+                flash('Ollama token saved.', 'success')
             else:
-                cp = CloudProvider(name=name, provider=provider, api_key=api_key_val, base_url=base_url)
-                db.session.add(cp)
-                db.session.commit()
-                flash(f'Cloud provider "{name}" added.', 'success')
-
-        elif action == 'toggle_provider':
-            provider_id = int(request.form.get('provider_id', 0))
-            cp = CloudProvider.query.get_or_404(provider_id)
-            cp.is_active = not cp.is_active
-            db.session.commit()
-            state = 'enabled' if cp.is_active else 'disabled'
-            flash(f'Provider "{cp.name}" {state}.', 'info')
-
-        elif action == 'delete_provider':
-            provider_id = int(request.form.get('provider_id', 0))
-            cp = CloudProvider.query.get_or_404(provider_id)
-            name = cp.name
-            db.session.delete(cp)
-            db.session.commit()
-            flash(f'Provider "{name}" deleted.', 'info')
+                # Clear the token
+                from models import SiteSettings as SS
+                row = SS.query.get('ollama_token')
+                if row:
+                    db.session.delete(row)
+                    db.session.commit()
+                flash('Ollama token cleared.', 'info')
 
         return redirect(url_for('api.admin_settings'))
 
     signup_enabled = SiteSettings.get('signup_enabled', 'true') == 'true'
-    providers = CloudProvider.query.order_by(CloudProvider.created_at.desc()).all()
-    return render_template('settings.html', signup_enabled=signup_enabled, providers=providers)
+    ollama_token = SiteSettings.get('ollama_token')
+    return render_template('settings.html', signup_enabled=signup_enabled, ollama_token=ollama_token)
