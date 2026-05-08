@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" class="h-full overflow-y-scroll">
+<html lang="en" class="h-full overflow-y-scroll" data-theme="light">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
@@ -28,6 +28,11 @@
             </button>
             <div class="collapse navbar-collapse" id="navbarNav">
                 <ul class="navbar-nav ms-auto">
+                    <li class="nav-item">
+                        <button id="darkModeToggle" class="btn btn-link nav-link" title="Toggle dark mode" aria-label="Toggle dark mode">
+                            <i id="darkModeIcon" class="fas fa-moon"></i>
+                        </button>
+                    </li>
                     {% if current_user.is_authenticated %}
                     <li class="nav-item">
                         <span class="nav-link text-muted"><i class="fas fa-user me-1"></i>{{ current_user.username }}</span>
@@ -91,6 +96,9 @@
                     <a href="/admin/users" class="list-group-item list-group-item-action {% if '/admin/users' in request.path %}active{% endif %}">
                         <i class="fas fa-users me-2"></i> Users
                     </a>
+                    <a href="/admin/settings" class="list-group-item list-group-item-action {% if '/admin/settings' in request.path %}active{% endif %}">
+                        <i class="fas fa-cog me-2"></i> Settings
+                    </a>
                     {% endif %}
                 </div>
             </div>
@@ -120,14 +128,44 @@
     <!-- jQuery -->
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <script>
+    (function () {
+        // Apply saved theme before first paint to avoid flash
+        const saved = localStorage.getItem('theme') || 'light';
+        document.documentElement.setAttribute('data-theme', saved);
+    })();
+
     document.addEventListener('DOMContentLoaded', function() {
         // Mobile sidebar toggle
         const toggler = document.querySelector('.navbar-toggler');
         const sidebar = document.querySelector('.sidebar');
-        
         if (toggler && sidebar) {
             toggler.addEventListener('click', function() {
                 sidebar.classList.toggle('show');
+            });
+        }
+
+        // Dark mode toggle
+        const toggle = document.getElementById('darkModeToggle');
+        const icon = document.getElementById('darkModeIcon');
+
+        function applyTheme(theme) {
+            document.documentElement.setAttribute('data-theme', theme);
+            localStorage.setItem('theme', theme);
+            if (theme === 'dark') {
+                icon.classList.replace('fa-moon', 'fa-sun');
+            } else {
+                icon.classList.replace('fa-sun', 'fa-moon');
+            }
+        }
+
+        // Sync icon on load
+        const currentTheme = document.documentElement.getAttribute('data-theme') || 'light';
+        applyTheme(currentTheme);
+
+        if (toggle) {
+            toggle.addEventListener('click', function() {
+                const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+                applyTheme(next);
             });
         }
     });

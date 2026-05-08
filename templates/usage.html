@@ -1,59 +1,173 @@
 {% extends "base.html" %}
-{% block title %}Usage — Vivus{% endblock %}
+{% block title %}Usage Analytics — Vivus{% endblock %}
+{% block extra_css %}
+<style>
+.stat-card .card-body { padding: 1rem; }
+.stat-card h2 { font-size: 1.8rem; margin: 0; }
+.stat-card .label { font-size: .75rem; text-transform: uppercase; letter-spacing: .05em; color: #888; }
+.chart-container { position: relative; height: 220px; }
+.tool-bar { display: flex; align-items: center; margin-bottom: .35rem; }
+.tool-bar .bar { height: 18px; background: #0d6efd; border-radius: 3px; min-width: 2px; }
+.tool-bar .name { width: 140px; font-size: .8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-bar .cnt { font-size: .75rem; color: #888; margin-left: .5rem; }
+.session-card { border-left: 3px solid #0d6efd; }
+.session-card.has-errors { border-left-color: #dc3545; }
+.session-queries { font-size: .8rem; color: #666; }
+.user-row:hover { background: #f1f5ff; cursor: pointer; }
+</style>
+{% endblock %}
 {% block content %}
-<h2><i class="fas fa-chart-bar me-2"></i>Usage Dashboard</h2>
+<h2 class="mb-3"><i class="fas fa-chart-line me-2"></i>Usage Analytics</h2>
 
 <!-- Summary cards -->
-<div class="row mb-4">
-    <div class="col-md-3">
-        <div class="card text-center">
+<div class="row g-3 mb-4">
+    <div class="col-6 col-md-2">
+        <div class="card stat-card text-center">
             <div class="card-body">
-                <h5 class="card-title text-muted">Requests</h5>
+                <div class="label">Requests</div>
                 <h2>{{ "{:,}".format(totals.requests) }}</h2>
             </div>
         </div>
     </div>
-    <div class="col-md-3">
-        <div class="card text-center">
+    <div class="col-6 col-md-2">
+        <div class="card stat-card text-center">
             <div class="card-body">
-                <h5 class="card-title text-muted">Prompt Tokens</h5>
+                <div class="label">Prompt Tok</div>
                 <h2>{{ "{:,}".format(totals.prompt) }}</h2>
             </div>
         </div>
     </div>
-    <div class="col-md-3">
-        <div class="card text-center">
+    <div class="col-6 col-md-2">
+        <div class="card stat-card text-center">
             <div class="card-body">
-                <h5 class="card-title text-muted">Completion Tokens</h5>
+                <div class="label">Completion Tok</div>
                 <h2>{{ "{:,}".format(totals.completion) }}</h2>
             </div>
         </div>
     </div>
-    <div class="col-md-3">
-        <div class="card text-center">
+    <div class="col-6 col-md-2">
+        <div class="card stat-card text-center">
             <div class="card-body">
-                <h5 class="card-title text-muted">Total Tokens</h5>
+                <div class="label">Total Tok</div>
                 <h2>{{ "{:,}".format(totals.total) }}</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-2">
+        <div class="card stat-card text-center">
+            <div class="card-body">
+                <div class="label">Errors</div>
+                <h2 class="{% if totals.errors > 0 %}text-danger{% endif %}">{{ "{:,}".format(totals.errors) }}</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-2">
+        <div class="card stat-card text-center">
+            <div class="card-body">
+                <div class="label">Avg Latency</div>
+                <h2>{% if totals.requests > 0 %}{{ "%.1f"|format(totals.total_duration_ms / totals.requests / 1000) }}s{% else %}—{% endif %}</h2>
             </div>
         </div>
     </div>
 </div>
 
-{% if per_user %}
+<!-- Charts row -->
+<div class="row g-3 mb-4">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header"><i class="fas fa-calendar-alt me-1"></i> Daily Activity (30d)</div>
+            <div class="card-body">
+                <div class="chart-container"><canvas id="dailyChart"></canvas></div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header"><i class="fas fa-clock me-1"></i> Hourly (24h)</div>
+            <div class="card-body">
+                <div class="chart-container"><canvas id="hourlyChart"></canvas></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Tool usage + Stop reasons + Performance -->
+<div class="row g-3 mb-4">
+    <div class="col-md-4">
+        <div class="card h-100">
+            <div class="card-header"><i class="fas fa-wrench me-1"></i> Top Tools</div>
+            <div class="card-body" style="max-height:280px;overflow-y:auto;">
+                {% set max_tool = tool_usage[0][1] if tool_usage else 1 %}
+                {% for name, count in tool_usage[:15] %}
+                <div class="tool-bar">
+                    <span class="name" title="{{ name }}">{{ name }}</span>
+                    <div class="bar" style="width:{{ (count / max_tool * 100)|int }}%;"></div>
+                    <span class="cnt">{{ count }}</span>
+                </div>
+                {% else %}
+                <span class="text-muted">No tool data yet</span>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card h-100">
+            <div class="card-header"><i class="fas fa-flag-checkered me-1"></i> Stop Reasons</div>
+            <div class="card-body">
+                <div class="chart-container"><canvas id="stopChart"></canvas></div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card h-100">
+            <div class="card-header"><i class="fas fa-tachometer-alt me-1"></i> Performance by Model</div>
+            <div class="card-body">
+                <table class="table table-sm mb-0">
+                    <thead><tr><th>Model</th><th>Reqs</th><th>Avg ms</th><th>Avg tok</th></tr></thead>
+                    <tbody>
+                    {% for t in tier_perf %}
+                    <tr>
+                        <td><small>{{ (t.model or '—').replace(':latest','') }}</small></td>
+                        <td>{{ t.count }}</td>
+                        <td>{{ "%.0f"|format(t.avg_ms or 0) }}</td>
+                        <td>{{ "%.0f"|format(t.avg_completion or 0) }}</td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="4" class="text-muted text-center">No data</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+                {% if error_stats %}
+                <hr class="my-2">
+                <h6 class="text-danger mb-1"><small>Top Errors</small></h6>
+                {% for e in error_stats %}
+                <div class="d-flex justify-content-between"><small class="text-truncate" style="max-width:200px" title="{{ e.error }}">{{ e.error }}</small><span class="badge bg-danger">{{ e.count }}</span></div>
+                {% endfor %}
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+{% if users_data %}
 <!-- Admin: per-user breakdown -->
 <div class="card mb-4">
-    <div class="card-header">Per-User Breakdown</div>
+    <div class="card-header"><i class="fas fa-users me-1"></i> Per-User Breakdown</div>
     <div class="table-responsive">
         <table class="table table-hover mb-0">
             <thead>
-                <tr><th>User ID</th><th>Requests</th><th>Total Tokens</th></tr>
+                <tr><th>User</th><th>Requests</th><th>Total Tokens</th><th>Errors</th><th>Avg Latency</th><th>Last Active</th><th></th></tr>
             </thead>
             <tbody>
-                {% for row in per_user %}
-                <tr>
-                    <td>{{ row.user_id }}</td>
-                    <td>{{ "{:,}".format(row.requests) }}</td>
-                    <td>{{ "{:,}".format(row.total_tokens) }}</td>
+                {% for u in users_data %}
+                <tr class="user-row" onclick="location.href='{{ url_for('api.user_usage', user_id=u.user_id) }}'">
+                    <td><strong>{{ u.username }}</strong></td>
+                    <td>{{ "{:,}".format(u.requests) }}</td>
+                    <td>{{ "{:,}".format(u.total_tokens) }}</td>
+                    <td>{% if u.errors %}<span class="text-danger">{{ u.errors }}</span>{% else %}0{% endif %}</td>
+                    <td>{% if u.requests > 0 %}{{ "%.1f"|format(u.total_duration_ms / u.requests / 1000) }}s{% else %}—{% endif %}</td>
+                    <td><small>{{ u.last_active.strftime('%Y-%m-%d %H:%M') if u.last_active else '—' }}</small></td>
+                    <td><a href="{{ url_for('api.user_usage', user_id=u.user_id) }}" class="btn btn-sm btn-outline-primary"><i class="fas fa-arrow-right"></i></a></td>
                 </tr>
                 {% endfor %}
             </tbody>
@@ -64,36 +178,111 @@
 
 <!-- Recent requests -->
 <div class="card">
-    <div class="card-header">Recent Requests (last 50)</div>
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="fas fa-list me-1"></i> Recent Requests</span>
+        <small class="text-muted">Last 100</small>
+    </div>
     <div class="table-responsive">
-        <table class="table table-hover mb-0">
+        <table class="table table-hover table-sm mb-0">
             <thead>
                 <tr>
                     <th>Time</th>
+                    {% if is_admin %}<th>User</th>{% endif %}
+                    <th>Query</th>
                     <th>Model</th>
-                    <th>Tier</th>
-                    <th>Prompt</th>
-                    <th>Completion</th>
-                    <th>Total</th>
+                    <th>Result</th>
+                    <th>Tools</th>
+                    <th>Round</th>
+                    <th>Tokens</th>
                     <th>Duration</th>
                 </tr>
             </thead>
             <tbody>
                 {% for r in recent %}
-                <tr>
-                    <td>{{ r.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
-                    <td><code>{{ r.model }}</code></td>
-                    <td><span class="badge bg-{% if r.tier == 'fast' %}info{% elif r.tier == 'strong' %}warning{% else %}primary{% endif %}">{{ r.tier }}</span></td>
-                    <td>{{ "{:,}".format(r.prompt_tokens) }}</td>
-                    <td>{{ "{:,}".format(r.completion_tokens) }}</td>
-                    <td>{{ "{:,}".format(r.total_tokens) }}</td>
-                    <td>{{ "%.1f"|format(r.duration_ms / 1000) }}s</td>
+                <tr class="{% if r.error %}table-danger{% endif %}">
+                    <td class="text-nowrap"><small>{{ r.created_at.strftime('%m-%d %H:%M:%S') }}</small></td>
+                    {% if is_admin %}<td><small>{{ user_map.get(r.user_id, '?') }}</small></td>{% endif %}
+                    <td style="max-width:350px;word-break:break-word;white-space:normal;" title="{{ r.query_summary or '' }}">
+                        <small>{{ r.query_summary or '—' }}</small>
+                    </td>
+                    <td><small title="{{ r.model }}">{{ r.model.replace(':latest','')[:20] }}</small></td>
+                    <td>
+                        {% if r.error %}
+                            <span class="badge bg-danger" title="{{ r.error }}">{{ r.error[:20] }}</span>
+                        {% elif r.stop_reason == 'tool_use' %}
+                            <span class="badge bg-secondary">{{ (r.tool_names or 'tool')[:20] }}</span>
+                        {% elif r.stop_reason == 'max_tokens' %}
+                            <span class="badge bg-warning text-dark">truncated</span>
+                        {% else %}
+                            <span class="badge bg-success">done</span>
+                        {% endif %}
+                    </td>
+                    <td><small>{{ r.tools_available or '—' }}</small></td>
+                    <td>{{ r.tool_round or 0 }}</td>
+                    <td class="text-nowrap"><small>{{ r.prompt_tokens }}/{{ r.completion_tokens }}</small></td>
+                    <td class="text-nowrap">{{ "%.1f"|format(r.duration_ms / 1000) }}s</td>
                 </tr>
                 {% else %}
-                <tr><td colspan="7" class="text-center text-muted">No usage data yet.</td></tr>
+                <tr><td colspan="{% if is_admin %}9{% else %}8{% endif %}" class="text-center text-muted">No usage data yet.</td></tr>
                 {% endfor %}
             </tbody>
         </table>
     </div>
 </div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script>
+const colors = { blue: '#0d6efd', red: '#dc3545', green: '#198754', yellow: '#ffc107', gray: '#6c757d', cyan: '#0dcaf0' };
+
+// Daily chart
+const dailyLabels = {{ daily | map(attribute='day') | list | tojson }};
+new Chart(document.getElementById('dailyChart'), {
+    type: 'bar',
+    data: {
+        labels: dailyLabels,
+        datasets: [
+            { label: 'Requests', data: {{ daily | map(attribute='requests') | list | tojson }}, backgroundColor: colors.blue, yAxisID: 'y' },
+            { label: 'Errors', data: {{ daily | map(attribute='errors') | list | tojson }}, backgroundColor: colors.red, yAxisID: 'y' },
+            { label: 'Tokens', data: {{ daily | map(attribute='tokens') | list | tojson }}, type: 'line', borderColor: colors.cyan, borderWidth: 2, pointRadius: 1, fill: false, yAxisID: 'y1' },
+        ]
+    },
+    options: {
+        responsive: true, maintainAspectRatio: false,
+        scales: {
+            x: { ticks: { maxTicksLimit: 15, font: { size: 10 } } },
+            y: { beginAtZero: true, position: 'left' },
+            y1: { beginAtZero: true, position: 'right', grid: { drawOnChartArea: false } },
+        },
+        plugins: { legend: { labels: { boxWidth: 12, font: { size: 11 } } } }
+    }
+});
+
+// Hourly chart
+const hourlyData = {{ hourly_data | tojson }};
+const hourLabels = Array.from({length: 24}, (_, i) => String(i).padStart(2, '0'));
+new Chart(document.getElementById('hourlyChart'), {
+    type: 'bar',
+    data: {
+        labels: hourLabels,
+        datasets: [{ label: 'Requests', data: hourLabels.map(h => hourlyData[parseInt(h)] || 0), backgroundColor: colors.blue }]
+    },
+    options: {
+        responsive: true, maintainAspectRatio: false,
+        scales: { x: { ticks: { font: { size: 9 } } }, y: { beginAtZero: true } },
+        plugins: { legend: { display: false } }
+    }
+});
+
+// Stop reason doughnut
+const stopLabels = {{ stop_stats | map(attribute='stop_reason') | list | tojson }};
+const stopData = {{ stop_stats | map(attribute='count') | list | tojson }};
+new Chart(document.getElementById('stopChart'), {
+    type: 'doughnut',
+    data: {
+        labels: stopLabels.map(l => l || 'unknown'),
+        datasets: [{ data: stopData, backgroundColor: [colors.green, colors.gray, colors.yellow, colors.red, colors.blue, colors.cyan] }]
+    },
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right', labels: { boxWidth: 10, font: { size: 10 } } } } }
+});
+</script>
 {% endblock %}

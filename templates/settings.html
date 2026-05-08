@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% block title %}Settings — Vivus{% endblock %}
+{% block content %}
+<h2><i class="fas fa-cog me-2"></i>Settings</h2>
+
+<!-- Registration settings -->
+<div class="card mb-4">
+    <div class="card-header fw-semibold">
+        <i class="fas fa-user-plus me-2"></i>Registration
+    </div>
+    <div class="card-body">
+        <form method="POST">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="action" value="save_settings">
+            <div class="form-check form-switch mb-3">
+                <input class="form-check-input" type="checkbox" id="signup_enabled" name="signup_enabled"
+                    {% if signup_enabled %}checked{% endif %}>
+                <label class="form-check-label" for="signup_enabled">
+                    Allow public registration
+                </label>
+                <div class="form-text text-muted">
+                    When disabled, only admins can create new accounts. Existing users are unaffected.
+                </div>
+            </div>
+            <button type="submit" class="btn btn-primary">
+                <i class="fas fa-save me-1"></i>Save
+            </button>
+        </form>
+    </div>
+</div>
+
+<!-- Cloud providers -->
+<div class="card mb-4">
+    <div class="card-header fw-semibold d-flex justify-content-between align-items-center">
+        <span><i class="fas fa-cloud me-2"></i>Cloud Model Providers</span>
+        <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#addProviderModal">
+            <i class="fas fa-plus me-1"></i>Add Provider
+        </button>
+    </div>
+    {% if providers %}
+    <div class="table-responsive">
+        <table class="table table-hover mb-0">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Provider</th>
+                    <th>API Key</th>
+                    <th>Base URL</th>
+                    <th>Status</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for p in providers %}
+                <tr{% if not p.is_active %} class="text-muted"{% endif %}>
+                    <td class="fw-semibold">{{ p.name }}</td>
+                    <td>
+                        <span class="badge bg-secondary">{{ p.provider }}</span>
+                    </td>
+                    <td><code>{{ p.masked_key }}</code></td>
+                    <td class="text-muted small">{{ p.base_url or '—' }}</td>
+                    <td>
+                        {% if p.is_active %}
+                        <span class="badge bg-success">Active</span>
+                        {% else %}
+                        <span class="badge bg-secondary">Disabled</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-end">
+                        <form method="POST" style="display:inline">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <input type="hidden" name="action" value="toggle_provider">
+                            <input type="hidden" name="provider_id" value="{{ p.id }}">
+                            <button type="submit" class="btn btn-sm btn-outline-{% if p.is_active %}secondary{% else %}success{% endif %}">
+                                {% if p.is_active %}Disable{% else %}Enable{% endif %}
+                            </button>
+                        </form>
+                        <form method="POST" style="display:inline"
+                              onsubmit="return confirm('Delete provider {{ p.name }}?')">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <input type="hidden" name="action" value="delete_provider">
+                            <input type="hidden" name="provider_id" value="{{ p.id }}">
+                            <button type="submit" class="btn btn-sm btn-outline-danger">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="card-body text-muted">
+        <i class="fas fa-info-circle me-1"></i>No cloud providers configured. Add one to route requests to OpenAI, Anthropic, or any OpenAI-compatible endpoint.
+    </div>
+    {% endif %}
+</div>
+
+<!-- Add Provider Modal -->
+<div class="modal fade" id="addProviderModal" tabindex="-1" aria-labelledby="addProviderModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="addProviderModalLabel">
+                    <i class="fas fa-cloud me-2"></i>Add Cloud Provider
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <form method="POST">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="action" value="add_provider">
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Display Name</label>
+                        <input type="text" class="form-control" name="provider_name" placeholder="e.g. OpenAI Production" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Provider Type</label>
+                        <select class="form-select" name="provider_type" required>
+                            <option value="">— select —</option>
+                            <option value="openai">OpenAI</option>
+                            <option value="anthropic">Anthropic</option>
+                            <option value="gemini">Google Gemini</option>
+                            <option value="mistral">Mistral</option>
+                            <option value="groq">Groq</option>
+                            <option value="custom">Custom / OpenAI-compatible</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">API Key</label>
+                        <input type="password" class="form-control" name="api_key" placeholder="sk-..." required autocomplete="new-password">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Base URL <span class="text-muted">(optional)</span></label>
+                        <input type="url" class="form-control" name="base_url" placeholder="https://api.openai.com/v1">
+                        <div class="form-text text-muted">Leave blank to use the provider's default endpoint.</div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-plus me-1"></i>Add Provider
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -2,7 +2,7 @@
 
 from flask import Blueprint, render_template, redirect, url_for, flash, request
 from flask_login import login_user, logout_user, login_required, current_user
-from models import db, User
+from models import db, User, SiteSettings
 
 auth_bp = Blueprint('auth', __name__, template_folder='templates')
 
@@ -36,6 +36,11 @@ def register():
     # or if an admin has enabled open registration.
     user_count = User.query.count()
     first_user = user_count == 0
+
+    # Block registration when signup is disabled (allow first-user bootstrap)
+    if not first_user and SiteSettings.get('signup_enabled', 'true') == 'false':
+        flash('Registration is currently disabled. Contact an administrator.', 'warning')
+        return redirect(url_for('auth.login'))
 
     if request.method == 'POST':
         username = request.form.get('username', '').strip()

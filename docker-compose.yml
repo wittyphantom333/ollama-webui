@@ -5,7 +5,7 @@ services:
     #build:
     #  context: .
     #  dockerfile: Dockerfile
-    image: ghcr.io/dkruyt/webollama:latest
+    image: ghcr.io/wittyphantom333/ollama-webui:latest
     container_name: webollama
     ports:
       - "5000:5000"

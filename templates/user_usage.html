@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+{% block title %}{{ user.username }} — Usage{% endblock %}
+{% block extra_css %}
+<style>
+.stat-card .card-body { padding: 1rem; }
+.stat-card h2 { font-size: 1.6rem; margin: 0; }
+.stat-card .label { font-size: .75rem; text-transform: uppercase; letter-spacing: .05em; color: #888; }
+.tool-bar { display: flex; align-items: center; margin-bottom: .35rem; }
+.tool-bar .bar { height: 18px; background: #0d6efd; border-radius: 3px; min-width: 2px; }
+.tool-bar .name { width: 140px; font-size: .8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-bar .cnt { font-size: .75rem; color: #888; margin-left: .5rem; }
+.session-card { border-left: 3px solid #0d6efd; margin-bottom: .75rem; }
+.session-card.has-errors { border-left-color: #dc3545; }
+.session-queries { font-size: .8rem; color: #555; line-height: 1.5; }
+.session-meta { font-size: .75rem; color: #888; }
+</style>
+{% endblock %}
+{% block content %}
+<div class="d-flex align-items-center mb-3">
+    <a href="{{ url_for('api.usage') }}" class="btn btn-sm btn-outline-secondary me-2"><i class="fas fa-arrow-left"></i></a>
+    <h2 class="mb-0"><i class="fas fa-user me-2"></i>{{ user.username }}</h2>
+</div>
+
+<!-- Summary -->
+<div class="row g-3 mb-4">
+    <div class="col-6 col-md-2">
+        <div class="card stat-card text-center">
+            <div class="card-body">
+                <div class="label">Requests</div>
+                <h2>{{ "{:,}".format(totals.requests) }}</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-2">
+        <div class="card stat-card text-center">
+            <div class="card-body">
+                <div class="label">Total Tokens</div>
+                <h2>{{ "{:,}".format(totals.total) }}</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-2">
+        <div class="card stat-card text-center">
+            <div class="card-body">
+                <div class="label">Errors</div>
+                <h2 class="{% if totals.errors > 0 %}text-danger{% endif %}">{{ "{:,}".format(totals.errors) }}</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-2">
+        <div class="card stat-card text-center">
+            <div class="card-body">
+                <div class="label">Avg Latency</div>
+                <h2>{% if totals.requests > 0 %}{{ "%.1f"|format(totals.total_duration_ms / totals.requests / 1000) }}s{% else %}—{% endif %}</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-2">
+        <div class="card stat-card text-center">
+            <div class="card-body">
+                <div class="label">First Seen</div>
+                <h2 style="font-size:1rem">{{ totals.first_seen.strftime('%Y-%m-%d') if totals.first_seen else '—' }}</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-2">
+        <div class="card stat-card text-center">
+            <div class="card-body">
+                <div class="label">Last Seen</div>
+                <h2 style="font-size:1rem">{{ totals.last_seen.strftime('%Y-%m-%d %H:%M') if totals.last_seen else '—' }}</h2>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-3 mb-4">
+    <!-- Tool usage -->
+    <div class="col-md-4">
+        <div class="card h-100">
+            <div class="card-header"><i class="fas fa-wrench me-1"></i> Tool Usage</div>
+            <div class="card-body" style="max-height:350px;overflow-y:auto;">
+                {% set max_tool = tool_usage[0][1] if tool_usage else 1 %}
+                {% for name, count in tool_usage[:20] %}
+                <div class="tool-bar">
+                    <span class="name" title="{{ name }}">{{ name }}</span>
+                    <div class="bar" style="width:{{ (count / max_tool * 100)|int }}%;"></div>
+                    <span class="cnt">{{ count }}</span>
+                </div>
+                {% else %}
+                <span class="text-muted">No tool data</span>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Sessions -->
+    <div class="col-md-8">
+        <div class="card h-100">
+            <div class="card-header"><i class="fas fa-layer-group me-1"></i> Recent Sessions <small class="text-muted ms-1">(grouped by 5min gaps)</small></div>
+            <div class="card-body" style="max-height:350px;overflow-y:auto;">
+                {% for s in sessions %}
+                <div class="card session-card {% if s.errors > 0 %}has-errors{% endif %}">
+                    <div class="card-body py-2 px-3">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <strong>{{ s.start.strftime('%b %d, %H:%M') }}</strong>
+                                <span class="session-meta ms-2">{{ s.requests }} reqs &middot; {{ "{:,}".format(s.tokens) }} tok &middot; {{ "%.0f"|format(s.duration_ms / 1000) }}s</span>
+                                {% if s.errors > 0 %}<span class="badge bg-danger ms-1">{{ s.errors }} err</span>{% endif %}
+                            </div>
+                            <small class="text-muted">{{ ((s.end - s.start).total_seconds() / 60)|int }}min</small>
+                        </div>
+                        {% if s.queries %}
+                        <div class="session-queries mt-1">
+                            {% for q in s.queries %}
+                            <span class="d-inline-block me-2">&bull; {{ q }}</span>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+                {% else %}
+                <p class="text-muted">No sessions yet.</p>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Full request log -->
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="fas fa-list me-1"></i> Request Log</span>
+        <small class="text-muted">Last 100</small>
+    </div>
+    <div class="table-responsive">
+        <table class="table table-hover table-sm mb-0">
+            <thead>
+                <tr><th>Time</th><th>Query</th><th>Tier</th><th>Result</th><th>Tools Called</th><th>Round</th><th>P/C Tok</th><th>Duration</th></tr>
+            </thead>
+            <tbody>
+                {% for r in recent %}
+                <tr class="{% if r.error %}table-danger{% endif %}">
+                    <td class="text-nowrap"><small>{{ r.created_at.strftime('%m-%d %H:%M:%S') }}</small></td>
+                    <td style="max-width:350px;word-break:break-word;white-space:normal;" title="{{ r.query_summary or '' }}">
+                        <small>{{ r.query_summary or '—' }}</small>
+                    </td>
+                    <td><span class="badge bg-{% if r.tier == 'fast' %}info{% elif r.tier == 'strong' %}warning{% else %}primary{% endif %}">{{ r.tier }}</span></td>
+                    <td>
+                        {% if r.error %}<span class="badge bg-danger" title="{{ r.error }}">{{ r.error[:20] }}</span>
+                        {% elif r.stop_reason == 'tool_use' %}<span class="badge bg-secondary">{{ (r.tool_names or 'tool')[:20] }}</span>
+                        {% elif r.stop_reason == 'max_tokens' %}<span class="badge bg-warning text-dark">truncated</span>
+                        {% else %}<span class="badge bg-success">done</span>{% endif %}
+                    </td>
+                    <td><small>{{ r.tool_names or '—' }}</small></td>
+                    <td>{{ r.tool_round or 0 }}</td>
+                    <td class="text-nowrap"><small>{{ r.prompt_tokens }}/{{ r.completion_tokens }}</small></td>
+                    <td class="text-nowrap">{{ "%.1f"|format(r.duration_ms / 1000) }}s</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="8" class="text-center text-muted">No usage data.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

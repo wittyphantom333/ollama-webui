@@ -70,6 +70,48 @@ class ApiKey(db.Model):
         return ApiKey.query.filter_by(key_hash=hashed, is_active=True).first()
 
 
+class SiteSettings(db.Model):
+    """Site-wide configuration stored as key/value pairs."""
+    __tablename__ = 'site_settings'
+
+    key = db.Column(db.String(80), primary_key=True)
+    value = db.Column(db.Text, nullable=True)
+
+    @staticmethod
+    def get(key, default=None):
+        row = SiteSettings.query.get(key)
+        return row.value if row else default
+
+    @staticmethod
+    def set(key, value):
+        row = SiteSettings.query.get(key)
+        if row is None:
+            row = SiteSettings(key=key)
+            db.session.add(row)
+        row.value = str(value)
+        db.session.commit()
+
+
+class CloudProvider(db.Model):
+    """Cloud LLM provider API keys (OpenAI, Anthropic, Gemini, etc.)."""
+    __tablename__ = 'cloud_providers'
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(120), nullable=False)
+    provider = db.Column(db.String(40), nullable=False)  # openai / anthropic / gemini / custom
+    api_key = db.Column(db.Text, nullable=False)
+    base_url = db.Column(db.String(300), nullable=True)   # optional endpoint override
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    @property
+    def masked_key(self):
+        """Return a display-safe masked version of the API key."""
+        if len(self.api_key) <= 8:
+            return '****'
+        return self.api_key[:6] + '...' + self.api_key[-4:]
+
+
 class UsageRecord(db.Model):
     """One row per API request routed through the proxy."""
     __tablename__ = 'usage_records'
@@ -85,3 +127,13 @@ class UsageRecord(db.Model):
     duration_ms = db.Column(db.Integer, default=0)
     endpoint = db.Column(db.String(200), nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+    # Extended metrics (added by proxy enrichment)
+    stop_reason = db.Column(db.String(30), nullable=True)       # end_turn, tool_use, max_tokens
+    tool_names = db.Column(db.String(500), nullable=True)        # comma-separated: Read,Edit
+    tools_available = db.Column(db.String(500), nullable=True)   # comma-separated: Bash,Edit,Read
+    tool_round = db.Column(db.Integer, default=0)                # conversation depth
+    query_summary = db.Column(db.String(500), nullable=True)     # full query or [round N] tool description
+    error = db.Column(db.String(200), nullable=True)             # upstream_504, fetch error, etc.
+    messages_sent = db.Column(db.Integer, default=0)             # messages sent to Ollama
+    prompt_budget_dropped = db.Column(db.Integer, default=0)     # messages dropped by budget trim
