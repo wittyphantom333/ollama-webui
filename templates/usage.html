@@ -94,7 +94,7 @@
 <!-- Tool usage + Stop reasons + Performance -->
 <div class="row g-3 mb-4">
     <div class="col-md-4">
-        <div class="card h-100">
+        <div class="card">
             <div class="card-header"><i class="fas fa-wrench me-1"></i> Top Tools</div>
             <div class="card-body" style="max-height:280px;overflow-y:auto;">
                 {% set max_tool = tool_usage[0][1] if tool_usage else 1 %}
@@ -111,17 +111,17 @@
         </div>
     </div>
     <div class="col-md-4">
-        <div class="card h-100">
+        <div class="card">
             <div class="card-header"><i class="fas fa-flag-checkered me-1"></i> Stop Reasons</div>
-            <div class="card-body">
-                <div class="chart-container"><canvas id="stopChart"></canvas></div>
+            <div class="card-body" style="max-height:280px;overflow-y:auto;">
+                <div class="chart-container" style="max-height:240px;"><canvas id="stopChart"></canvas></div>
             </div>
         </div>
     </div>
     <div class="col-md-4">
-        <div class="card h-100">
+        <div class="card">
             <div class="card-header"><i class="fas fa-tachometer-alt me-1"></i> Performance by Model</div>
-            <div class="card-body">
+            <div class="card-body" style="max-height:280px;overflow-y:auto;">
                 <table class="table table-sm mb-0">
                     <thead><tr><th>Model</th><th>Reqs</th><th>Avg ms</th><th>Avg tok</th></tr></thead>
                     <tbody>
