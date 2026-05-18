@@ -5,7 +5,20 @@ This document describes how to deploy updates to the Vivus Portal application on
 
 ## Deployment Methods
 
-### Method 1: Direct Code Deployment (Non-Docker)
+### Method 1: Automated Deployment Script (Recommended)
+
+For the current deployment at 10.5.143.213, use the provided deployment script:
+
+```bash
+./deploy.sh
+```
+
+This script will:
+1. Copy all updated files to the remote server
+2. Kill the existing process
+3. Start the application with the new code
+
+### Method 2: Direct Code Deployment (Non-Docker)
 
 1. **Push changes to GitHub:**
    ```bash
@@ -17,20 +30,23 @@ This document describes how to deploy updates to the Vivus Portal application on
 2. **On the remote server:**
    ```bash
    # Navigate to the application directory
-   cd /path/to/vivus-portal
+   cd /home/witt/vivus/portal
    
-   # Pull the latest changes
-   git pull origin main
+   # Copy updated files manually or using rsync
+   # (This depends on how you transfer files)
    
-   # If there are new dependencies, update them
+   # Kill existing process
+   PID=$(ps aux | grep "flask run" | grep -v grep | awk "{print \$2}")
+   if [ ! -z "$PID" ]; then
+       kill $PID
+   fi
+   
+   # Start the application
    source .venv/bin/activate
-   pip install -r requirements.txt
-   
-   # Restart the application
-   # This depends on how the application is running (systemd, screen, etc.)
+   nohup python -m flask run --host=0.0.0.0 --port=5050 > /tmp/vivus-portal.log 2>&1 &
    ```
 
-### Method 2: Docker Deployment
+### Method 3: Docker Deployment
 
 1. **Push changes to GitHub:**
    ```bash
@@ -48,7 +64,7 @@ This document describes how to deploy updates to the Vivus Portal application on
 3. **On the remote server:**
    ```bash
    # Navigate to the application directory
-   cd /path/to/vivus-portal
+   cd /home/witt/vivus/portal
    
    # Pull the latest docker-compose.yml if it changed
    git pull origin main
@@ -74,5 +90,5 @@ This document describes how to deploy updates to the Vivus Portal application on
 - Check that the CSS file path is correct in the templates
 
 ## Monitoring Deployment
-- Check application logs: `tail -f /var/log/vivus-portal.log` (or wherever logs are stored)
-- Verify the application is running: `curl http://localhost:5000`
+- Check application logs: `tail -f /tmp/vivus-portal.log`
+- Verify the application is running: `curl http://localhost:5050`
