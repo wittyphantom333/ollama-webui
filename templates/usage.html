@@ -161,18 +161,17 @@
             <div class="card-body">
                 <div class="table-responsive">
                     <table class="table table-sm small mb-0">
-                        <thead><tr><th>Tier</th><th>Requests</th><th>Avg Tokens</th><th>Avg Duration</th><th>Errors</th></tr></thead>
+                        <thead><tr><th>Model</th><th>Requests</th><th>Avg Duration</th><th>Avg Completion</th></tr></thead>
                         <tbody>
                             {% for t in tier_perf %}
                             <tr>
-                                <td><span class="badge bg-info">{{ t.tier }}</span></td>
-                                <td>{{ t.cnt }}</td>
-                                <td>{{ "%.0f"|format(t.avg_tokens) }}</td>
-                                <td>{{ "%.1f"|format(t.avg_duration_ms / 1000) }}s</td>
-                                <td>{% if t.errors > 0 %}<span class="text-danger">{{ t.errors }}</span>{% else %}0{% endif %}</td>
+                                <td><span class="badge bg-info">{{ t.model }}</span></td>
+                                <td>{{ t.count }}</td>
+                                <td>{{ "%.1f"|format(t.avg_ms / 1000) }}s</td>
+                                <td>{{ "%.0f"|format(t.avg_completion) }}</td>
                             </tr>
                             {% else %}
-                            <tr><td colspan="5" class="text-muted">No data.</td></tr>
+                            <tr><td colspan="4" class="text-muted">No data.</td></tr>
                             {% endfor %}
                         </tbody>
                     </table>
