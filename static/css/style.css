@@ -150,6 +150,10 @@ input:focus, select:focus, textarea:focus {
   background-color: white !important;
   box-shadow: var(--card-shadow);
   height: var(--header-height);
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
   padding: 0 1rem;
   z-index: 1030;
   border-bottom: 1px solid var(--border-color);
@@ -181,8 +185,10 @@ input:focus, select:focus, textarea:focus {
 .sidebar {
   background-color: white;
   height: calc(100vh - var(--header-height));
-  position: sticky;
+  position: fixed;
   top: var(--header-height);
+  left: 0;
+  width: 16.666667%; /* Approximately 1/6 of the screen */
   padding: 1rem 0;
   z-index: 1020;
   overflow-y: auto;
@@ -231,6 +237,8 @@ input:focus, select:focus, textarea:focus {
 .content-wrapper {
   min-height: calc(100vh - var(--header-height));
   padding: 0;
+  margin-left: 16.666667%; /* Approximately 1/6 of the screen for sidebar */
+  margin-top: var(--header-height); /* Account for fixed navbar */
 }
 
 .content {
