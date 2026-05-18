@@ -7,7 +7,7 @@ echo "Starting deployment to remote server..."
 
 # Copy files to remote server
 echo "Copying files to remote server..."
-rsync -avz --exclude='.git' --exclude='*.pyc' --exclude='__pycache__' --exclude='.venv' --exclude='instance' ./ witt@10.5.143.213:/home/witt/vivus/portal/
+tar -cz --exclude='.git' --exclude='*.pyc' --exclude='__pycache__' --exclude='.venv' --exclude='instance' --exclude='*.log' -f - . | ssh witt@10.5.143.213 "cd /home/witt/vivus/portal && tar -xz"
 
 # Restart the application on remote server
 echo "Restarting application on remote server..."
