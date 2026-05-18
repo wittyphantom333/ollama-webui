@@ -104,9 +104,9 @@
                 {% if tool_usage %}
                 {% for t in tool_usage %}
                 <div class="tool-bar">
-                    <span class="name" title="{{ t.tool }}">{{ t.tool }}</span>
-                    <div class="bar flex-grow-1" style="width:{{ (t.cnt / tool_usage[0].cnt * 100)|round }}%"></div>
-                    <span class="cnt">{{ t.cnt }}</span>
+                    <span class="name" title="{{ t[0] }}">{{ t[0] }}</span>
+                    <div class="bar flex-grow-1" style="width:{{ (t[1] / tool_usage[0][1] * 100)|round }}%"></div>
+                    <span class="cnt">{{ t[1] }}</span>
                 </div>
                 {% endfor %}
                 {% else %}
