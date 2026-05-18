@@ -292,7 +292,7 @@ new Chart(document.getElementById('dailyChart'), {
         labels: dailyLabels,
         datasets: [{
             label: 'Requests',
-            data: {{ daily | map(attribute='cnt') | list | tojson }},
+            data: {{ daily | map(attribute='requests') | list | tojson }},
             backgroundColor: colors.blue,
             borderRadius: 3,
         }]
