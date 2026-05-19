@@ -22,9 +22,15 @@ if [ ! -z "$PID" ]; then
     sleep 2
 fi
 
+# Install/update dependencies
+if [ ! -d "venv" ]; then
+    python3 -m venv venv
+fi
+source venv/bin/activate
+pip install -q flask flask-login flask-sqlalchemy flask-wtf python-dotenv requests markdown gunicorn 2>/dev/null
+
 # Start the application
 echo "Starting application..."
-source .venv/bin/activate
 nohup python -m flask run --host=0.0.0.0 --port=5050 > /tmp/vivus-portal.log 2>&1 &
 echo "Application started with PID $!"
 '
