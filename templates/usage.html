@@ -11,18 +11,42 @@
 .tool-bar .name { width: 100px; font-size: .75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tool-bar .cnt { font-size: .7rem; color: #888; margin-left: .4rem; }
 .user-row:hover { background: #f1f5ff; cursor: pointer; }
-.req-item { padding: .6rem 1rem; border-bottom: 1px solid #eee; transition: background .1s; }
+.req-item { padding: .6rem 1rem; border-bottom: 1px solid #eee; transition: background .1s; border-left: 4px solid transparent; }
 .req-item:last-child { border-bottom: 0; }
 .req-item:hover { background: #f8f9ff; }
+.req-item.ok { border-left-color: #28a745; }
+.req-item.err { border-left-color: #dc3545; }
+.req-item.tool { border-left-color: #6c757d; }
+.req-item.trunc { border-left-color: #ffc107; }
 .req-item .q { font-size: .82rem; line-height: 1.3; color: #222; }
 .req-item .meta { font-size: .7rem; color: #888; }
 .req-item .chip { display: inline-block; font-size: .62rem; background: #e9ecef; border-radius: 3px; padding: 1px 5px; margin: 1px; color: #555; }
+.req-item .chip.ok-chip { background: #d4edda; color: #155724; }
+.req-item .chip.err-chip { background: #f8d7da; color: #721c24; }
+.req-item .chip.tool-chip { background: #e2e3e5; color: #383d41; }
+.req-item .chip.trunc-chip { background: #fff3cd; color: #856404; }
+.req-item .chip.model-chip { background: #cce5ff; color: #004085; }
+.req-item .chip.tier-chip { background: #d6d8db; color: #1e1e2a; }
+.req-item .chip.toolname-chip { background: #e8daef; color: #6c3483; }
 .req-item .status-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 3px; }
+.req-item .tokens-up { color: #28a745; font-size: .55rem; }
+.req-item .tokens-down { color: #17a2b8; font-size: .55rem; }
+.req-item .duration { color: #6c757d; }
 [data-theme="dark"] .req-item { border-color: #2d3748; }
 [data-theme="dark"] .req-item:hover { background: #1a202c; }
 [data-theme="dark"] .req-item .q { color: #e2e8f0; }
 [data-theme="dark"] .req-item .meta { color: #a0aec0; }
 [data-theme="dark"] .req-item .chip { background: #2d3748; color: #cbd5e0; }
+[data-theme="dark"] .req-item .chip.ok-chip { background: #1e3a2f; color: #6fcf97; }
+[data-theme="dark"] .req-item .chip.err-chip { background: #3a1e1e; color: #f28b82; }
+[data-theme="dark"] .req-item .chip.tool-chip { background: #2d2d2d; color: #b0b0b0; }
+[data-theme="dark"] .req-item .chip.trunc-chip { background: #3a3520; color: #f9e79f; }
+[data-theme="dark"] .req-item .chip.model-chip { background: #1a2a3a; color: #85c1e9; }
+[data-theme="dark"] .req-item .chip.tier-chip { background: #2a2a35; color: #c0c0d0; }
+[data-theme="dark"] .req-item .chip.toolname-chip { background: #2a1a3a; color: #bb8fce; }
+[data-theme="dark"] .req-item .tokens-up { color: #6fcf97; }
+[data-theme="dark"] .req-item .tokens-down { color: #76d7c4; }
+[data-theme="dark"] .req-item .duration { color: #a0aec0; }
 </style>
 {% endblock %}
 {% block content %}
@@ -135,7 +159,8 @@
     <div class="card-body p-0">
         {% if recent %}
         {% for r in recent %}
-        <div class="req-item">
+        {% set cls = 'err' if r.error else ('tool' if r.stop_reason == 'tool_use' else ('trunc' if r.stop_reason == 'max_tokens' else 'ok')) %}
+        <div class="req-item {{ cls }}">
             <div class="d-flex align-items-start gap-2">
                 <div class="text-nowrap text-end" style="min-width: 50px;">
                     <div class="meta">{{ r.created_at.strftime('%H:%M') }}</div>
@@ -145,35 +170,31 @@
                     <div class="q mb-1">{{ r.query_summary or '—' }}</div>
                     <div class="d-flex flex-wrap align-items-center gap-1">
                         {% if r.error %}
-                            <span class="status-dot bg-danger" title="{{ r.error }}"></span>
-                            <span class="chip text-danger border border-danger">{{ r.error[:20] }}</span>
+                            <span class="chip err-chip">{{ r.error[:20] }}</span>
                         {% elif r.stop_reason == 'tool_use' %}
-                            <span class="status-dot bg-secondary"></span>
-                            <span class="chip">tool</span>
+                            <span class="chip tool-chip">tool</span>
                         {% elif r.stop_reason == 'max_tokens' %}
-                            <span class="status-dot bg-warning"></span>
-                            <span class="chip">trunc</span>
+                            <span class="chip trunc-chip">trunc</span>
                         {% else %}
-                            <span class="status-dot bg-success"></span>
-                            <span class="chip">ok</span>
+                            <span class="chip ok-chip">ok</span>
                         {% endif %}
-                        <span class="chip">{{ r.model.replace(':latest','')[:15] }}</span>
-                        {% if r.tier %}<span class="chip">{{ r.tier }}</span>{% endif %}
+                        <span class="chip model-chip">{{ r.model.replace(':latest','')[:15] }}</span>
+                        {% if r.tier %}<span class="chip tier-chip">{{ r.tier }}</span>{% endif %}
                         {% if r.tool_names %}
                             {% for tn in r.tool_names.split(',')[:3] %}
-                            <span class="chip">{{ tn.strip()[:12] }}</span>
+                            <span class="chip toolname-chip">{{ tn.strip()[:12] }}</span>
                             {% endfor %}
                             {% if r.tool_names.split(',')|length > 3 %}
-                            <span class="chip">+{{ r.tool_names.split(',')|length - 3 }}</span>
+                            <span class="chip toolname-chip">+{{ r.tool_names.split(',')|length - 3 }}</span>
                             {% endif %}
                         {% endif %}
                     </div>
                 </div>
                 <div class="text-nowrap text-end" style="min-width: 80px;">
-                    <div class="meta"><i class="fas fa-arrow-up" style="font-size: .55rem;"></i> {{ "{:,}".format(r.prompt_tokens) }} <i class="fas fa-arrow-down ms-1" style="font-size: .55rem;"></i> {{ "{:,}".format(r.completion_tokens) }}</div>
-                    <div class="meta mt-1"><i class="fas fa-clock me-1" style="font-size: .55rem;"></i>{{ "%.1f"|format(r.duration_ms / 1000) }}s</div>
+                    <div class="meta"><i class="fas fa-arrow-up tokens-up"></i> {{ "{:,}".format(r.prompt_tokens) }} <i class="fas fa-arrow-down ms-1 tokens-down"></i> {{ "{:,}".format(r.completion_tokens) }}</div>
+                    <div class="meta mt-1 duration"><i class="fas fa-clock me-1" style="font-size: .55rem;"></i>{{ "%.1f"|format(r.duration_ms / 1000) }}s</div>
                     {% if r.messages_sent and r.messages_sent > 0 %}
-                    <div class="meta">{{ r.messages_sent }} msgs</div>
+                    <div class="meta duration">{{ r.messages_sent }} msgs</div>
                     {% endif %}
                 </div>
             </div>
