@@ -12,7 +12,10 @@ Routes used by the portal UI:
 from datetime import datetime, timezone
 from flask import Blueprint, render_template, redirect, url_for, flash, request, jsonify
 from flask_login import login_required, current_user
-from models import db, ApiKey, UsageRecord, SiteSettings, CloudProvider
+from models import (
+    db, ApiKey, UsageRecord, SiteSettings, CloudProvider, ToolCall,
+    OAuthAuthCode, OAuthToken, OAUTH_ALLOWED_CLIENT_IDS, OAUTH_GRANTED_SCOPE,
+)
 
 api_bp = Blueprint('api', __name__, template_folder='templates')
 
@@ -148,6 +151,37 @@ def ingest_metrics():
         prompt_budget_dropped=data.get('prompt_budget_dropped', 0),
     )
     db.session.add(record)
+    db.session.flush()  # assign record.id before linking tool calls
+
+    # Optional captured tool details (proxy sends these only with
+    # CAPTURE_TOOL_DETAILS=1). Already redacted + size-capped upstream; we
+    # additionally hard-cap each field here as defense in depth.
+    tool_calls = data.get('tool_calls')
+    if isinstance(tool_calls, list):
+        FIELD_CAP = 16000
+
+        def _cap(v):
+            if v is None:
+                return None
+            s = v if isinstance(v, str) else str(v)
+            return s[:FIELD_CAP] if len(s) > FIELD_CAP else s
+
+        for i, tc in enumerate(tool_calls[:50]):
+            if not isinstance(tc, dict) or not tc.get('name'):
+                continue
+            db.session.add(ToolCall(
+                usage_record_id=record.id,
+                seq=i,
+                name=str(tc.get('name'))[:80],
+                action=(str(tc.get('action'))[:20] if tc.get('action') else None),
+                target=_cap(tc.get('target')),
+                command=_cap(tc.get('command')),
+                old_text=_cap(tc.get('old_text')),
+                new_text=_cap(tc.get('new_text')),
+                content=_cap(tc.get('content')),
+                bytes=int(tc.get('bytes') or 0),
+            ))
+
     db.session.commit()
 
     return jsonify({'ok': True}), 200
@@ -207,14 +241,23 @@ def usage():
         } for s in user_stats]
 
     # --- Tool usage breakdown ---
-    all_records = base_q.filter(UsageRecord.tool_names != None).all()
+    # Aggregate in SQL by distinct comma-separated combo, then split once per combo.
+    # The base table may have ~20k matching rows, but distinct combos are typically <50.
+    tool_combo_q = db.session.query(
+        UsageRecord.tool_names,
+        func.count(UsageRecord.id).label('n'),
+    ).filter(UsageRecord.tool_names != None)
+    if not is_admin:
+        tool_combo_q = tool_combo_q.filter(UsageRecord.user_id == current_user.id)
+    tool_combo_rows = tool_combo_q.group_by(UsageRecord.tool_names).all()
     tool_counts = {}
-    for r in all_records:
-        if r.tool_names:
-            for t in r.tool_names.split(','):
-                t = t.strip()
-                if t:
-                    tool_counts[t] = tool_counts.get(t, 0) + 1
+    for combo, n in tool_combo_rows:
+        if not combo:
+            continue
+        for t in combo.split(','):
+            t = t.strip()
+            if t:
+                tool_counts[t] = tool_counts.get(t, 0) + n
     tool_usage = sorted(tool_counts.items(), key=lambda x: -x[1])
 
     # --- Stop reason distribution ---
@@ -288,6 +331,56 @@ def usage():
         hourly_data=hourly_data, daily=daily, tier_perf=tier_perf,
         recent=recent, is_admin=is_admin, user_map=user_map,
     )
+
+
+@api_bp.route('/request/<int:request_id>')
+@login_required
+def request_detail(request_id):
+    """Return JSON details for a single usage record."""
+    from models import User as UserModel
+
+    record = UsageRecord.query.get_or_404(request_id)
+
+    # Authorization: admin can see any, regular users only their own
+    if not current_user.is_admin and record.user_id != current_user.id:
+        return jsonify({'error': 'forbidden'}), 403
+
+    user = UserModel.query.get(record.user_id)
+
+    return jsonify({
+        'id': record.id,
+        'user': user.username if user else f'user-{record.user_id}',
+        'model': record.model,
+        'tier': record.tier,
+        'status': 'error' if record.error else 'success',
+        'error': record.error,
+        'endpoint': record.endpoint,
+        'timestamp': record.created_at.isoformat() if record.created_at else '',
+        'prompt_tokens': record.prompt_tokens,
+        'completion_tokens': record.completion_tokens,
+        'total_tokens': record.total_tokens,
+        'duration': record.duration_ms,
+        'messages_sent': record.messages_sent,
+        'budget_dropped': record.prompt_budget_dropped,
+        'tool_round': record.tool_round,
+        'stop_reason': record.stop_reason,
+        'tools_used': (record.tool_names or '').split(',') if record.tool_names else [],
+        'tools_available': (record.tools_available or '').split(',') if record.tools_available else [],
+        'query': record.query_summary or '',
+        'tool_calls': [
+            {
+                'name': tc.name,
+                'action': tc.action,
+                'target': tc.target,
+                'command': tc.command,
+                'old_text': tc.old_text,
+                'new_text': tc.new_text,
+                'content': tc.content,
+                'bytes': tc.bytes,
+            }
+            for tc in record.tool_calls.order_by(ToolCall.seq).all()
+        ],
+    })
 
 
 @api_bp.route('/usage/user/<int:user_id>')
@@ -474,3 +567,106 @@ def admin_settings():
     signup_enabled = SiteSettings.get('signup_enabled', 'true') == 'true'
     ollama_token = SiteSettings.get('ollama_token')
     return render_template('settings.html', signup_enabled=signup_enabled, ollama_token=ollama_token)
+
+
+# ---------------------------------------------------------------------------
+# OAuth 2.0 — token exchange & CLI key provisioning (machine-facing)
+# ---------------------------------------------------------------------------
+# These are called by the Vivus CLI (not a browser), so they live on the
+# CSRF-exempt api blueprint. The browser-facing consent + callback pages are
+# in oauth_routes.py.
+
+def _bearer_token():
+    auth = request.headers.get('Authorization', '')
+    if auth.startswith('Bearer '):
+        return auth[7:].strip()
+    return ''
+
+
+def _oauth_user_from_bearer():
+    """Resolve the active OAuth access token to a live user, or None."""
+    token = OAuthToken.lookup_access(_bearer_token())
+    if token is None:
+        return None
+    user = token.user
+    if user is None or not user.is_active:
+        return None
+    return user
+
+
+@api_bp.route('/v1/oauth/token', methods=['POST'])
+def oauth_token():
+    """Exchange a PKCE authorization code (or refresh token) for tokens."""
+    data = request.get_json(silent=True) or request.form.to_dict() or {}
+    grant_type = data.get('grant_type', '')
+    client_id = data.get('client_id', '')
+
+    if client_id and client_id not in OAUTH_ALLOWED_CLIENT_IDS:
+        return jsonify({'error': 'invalid_client'}), 401
+
+    if grant_type == 'authorization_code':
+        row, err = OAuthAuthCode.consume(
+            data.get('code', ''),
+            data.get('redirect_uri', ''),
+            data.get('code_verifier', ''),
+        )
+        if err:
+            return jsonify({'error': err}), 401
+        token = OAuthToken.issue(row.user_id, row.client_id, row.scope or OAUTH_GRANTED_SCOPE)
+    elif grant_type == 'refresh_token':
+        existing = OAuthToken.lookup_refresh(data.get('refresh_token', ''))
+        if existing is None:
+            return jsonify({'error': 'invalid_grant'}), 401
+        requested = data.get('scope') or existing.scope or OAUTH_GRANTED_SCOPE
+        # Never grant inference scope — keep the CLI on the API-key path.
+        scope = ' '.join(s for s in requested.split() if s != 'user:inference')
+        token = OAuthToken.issue(existing.user_id, existing.client_id, scope)
+    else:
+        return jsonify({'error': 'unsupported_grant_type'}), 400
+
+    user = token.user
+    return jsonify({
+        'token_type': 'Bearer',
+        'access_token': token.access_token,
+        'refresh_token': token.refresh_token,
+        'expires_in': token.expires_in,
+        'scope': token.scope,
+        'account': {
+            'uuid': user.account_uuid,
+            'email_address': user.email,
+        },
+        'organization': {
+            'uuid': user.org_uuid,
+        },
+    })
+
+
+@api_bp.route('/api/oauth/vivus_cli/create_api_key', methods=['POST'])
+def oauth_create_api_key():
+    """Mint a per-user API key for the authenticated CLI session."""
+    user = _oauth_user_from_bearer()
+    if user is None:
+        return jsonify({'error': 'unauthorized'}), 401
+    raw_key, key_hash, key_prefix = ApiKey.generate_key()
+    api_key = ApiKey(user_id=user.id, name='vivus-cli', key_hash=key_hash, key_prefix=key_prefix)
+    db.session.add(api_key)
+    db.session.commit()
+    return jsonify({
+        'raw_key': raw_key,
+        'key_id': api_key.id,
+        'key_prefix': key_prefix,
+    })
+
+
+@api_bp.route('/api/oauth/vivus_cli/roles', methods=['GET'])
+def oauth_roles():
+    """Best-effort roles for the signed-in user (non-fatal in the CLI)."""
+    user = _oauth_user_from_bearer()
+    if user is None:
+        return jsonify({'error': 'unauthorized'}), 401
+    role = 'admin' if user.is_admin else 'member'
+    return jsonify({
+        'organization_role': role,
+        'workspace_role': role,
+        'organization_name': 'Vivus',
+    })

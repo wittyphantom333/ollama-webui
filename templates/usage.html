@@ -160,7 +160,7 @@
         {% if recent %}
         {% for r in recent %}
         {% set cls = 'err' if r.error else ('tool' if r.stop_reason == 'tool_use' else ('trunc' if r.stop_reason == 'max_tokens' else 'ok')) %}
-        <div class="req-item {{ cls }}">
+        <div class="req-item {{ cls }}" style="cursor: pointer;" onclick="showDetail({{ r.id }})">
             <div class="d-flex align-items-start gap-2">
                 <div class="text-nowrap text-end" style="min-width: 50px;">
                     <div class="meta">{{ r.created_at.strftime('%H:%M') }}</div>
@@ -223,9 +223,219 @@ new Chart(document.getElementById('dailyChart'), {
     options: {
         responsive: true, maintainAspectRatio: false,
         plugins: { legend: { display: false } },
-        scales: { y: { beginAtZero: true, ticks: { stepSize: 1, font: { size: 10 } } },
+        scales: { y: { beginAtZero: true, ticks: { precision: 0, maxTicksLimit: 8, font: { size: 10 } } },
                  x: { ticks: { font: { size: 9 } } } }
     }
 });
 </script>
+
+<!-- Detail Modal (custom, no Bootstrap JS) -->
+<div id="detailModal" onclick="if(event.target===this)closeDetailModal()" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.55);align-items:flex-start;justify-content:center;padding:104px 16px 24px 16px;overflow-y:auto;">
+    <div class="card" style="width:100%;max-width:1100px;height:fit-content;margin:0;align-self:flex-start;max-height:92vh;overflow-y:auto;border:1px solid var(--border-color,#dee2e6);box-shadow:0 12px 40px rgba(0,0,0,0.3);">
+        <div class="card-header" style="position:sticky;top:0;z-index:2;display:flex;justify-content:space-between;align-items:center;padding:10px 16px;background:var(--card-header-bg,var(--bs-card-cap-bg,#fff));">
+            <h6 style="margin:0;font-weight:600;">
+                <i class="fas fa-receipt me-2" style="opacity:0.7;"></i>
+                Request Details
+                <span id="detailReqId" style="font-weight:400;opacity:0.6;font-size:0.8rem;margin-left:6px;"></span>
+            </h6>
+            <button onclick="closeDetailModal()" aria-label="Close" style="background:none;border:none;font-size:1.5rem;cursor:pointer;padding:0;line-height:1;color:var(--text-dark,#000);opacity:0.6;">&times;</button>
+        </div>
+        <div id="detailContent" class="card-body" style="padding:14px 16px;"></div>
+    </div>
+</div>
+
+<script>
+function fmtNum(n) {
+    if (n == null || isNaN(n)) return '—';
+    return Number(n).toLocaleString();
+}
+function fmtMs(ms) {
+    if (ms == null || isNaN(ms)) return '—';
+    if (ms < 1000) return ms + ' ms';
+    return (ms / 1000).toFixed(2) + ' s';
+}
+function fmtTime(iso) {
+    if (!iso) return '—';
+    try {
+        const d = new Date(iso);
+        return d.toLocaleString(undefined, {
+            month: 'short', day: '2-digit',
+            hour: '2-digit', minute: '2-digit', second: '2-digit',
+        });
+    } catch { return iso; }
+}
+function stat(label, value, opts) {
+    opts = opts || {};
+    const muted = (value === '—' || value === '' || value == null) ? 'opacity:0.4;' : '';
+    return `
+        <div style="padding:7px 11px;background:var(--card-bg, rgba(127,127,127,0.06));border:1px solid var(--border-color,#dee2e6);border-radius:5px;">
+            <div style="font-size:0.65rem;text-transform:uppercase;letter-spacing:0.05em;opacity:0.55;margin-bottom:2px;">${label}</div>
+            <div style="font-size:${opts.large ? '1rem' : '0.88rem'};font-weight:600;${muted}word-break:break-word;">${value || '—'}</div>
+        </div>`;
+}
+function escapeHtml(s) {
+    return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function actionMeta(action) {
+    switch (action) {
+        case 'write':  return { icon: 'fa-file-circle-plus', color: '#198754', label: 'Write' };
+        case 'edit':   return { icon: 'fa-pen',               color: '#0d6efd', label: 'Edit' };
+        case 'bash':   return { icon: 'fa-terminal',          color: '#6f42c1', label: 'Bash' };
+        case 'delete': return { icon: 'fa-trash',             color: '#dc3545', label: 'Delete' };
+        case 'move':   return { icon: 'fa-arrows-left-right', color: '#fd7e14', label: 'Move' };
+        default:       return { icon: 'fa-gear',              color: '#6c757d', label: action || 'Tool' };
+    }
+}
+function renderDiff(oldText, newText) {
+    // Line-level diff. Not a full Myers diff — just marks removed/added lines.
+    const oldLines = (oldText || '').split('\n');
+    const newLines = (newText || '').split('\n');
+    const oldSet = new Set(oldLines);
+    const newSet = new Set(newLines);
+    let html = '';
+    if (oldText) {
+        for (const l of oldLines) {
+            const changed = !newSet.has(l);
+            html += `<div style="white-space:pre-wrap;word-break:break-word;${changed ? 'background:rgba(220,53,69,0.15);color:#dc3545;' : 'opacity:0.55;'}">${changed ? '- ' : '  '}${escapeHtml(l)}</div>`;
+        }
+    }
+    if (newText) {
+        for (const l of newLines) {
+            const changed = !oldSet.has(l);
+            html += `<div style="white-space:pre-wrap;word-break:break-word;${changed ? 'background:rgba(25,135,84,0.15);color:#198754;' : 'opacity:0.55;'}">${changed ? '+ ' : '  '}${escapeHtml(l)}</div>`;
+        }
+    }
+    return html;
+}
+function renderChange(tc, idx) {
+    const m = actionMeta(tc.action);
+    let bodyHtml = '';
+    if (tc.action === 'bash') {
+        bodyHtml = `<pre style="margin:0;padding:10px 12px;background:#1e1e1e;color:#d4d4d4;border-radius:0 0 5px 5px;overflow:auto;max-height:240px;font-size:0.78rem;line-height:1.45;white-space:pre-wrap;word-break:break-word;"><span style="opacity:0.5;">$ </span>${escapeHtml(tc.command || '')}</pre>`;
+    } else if (tc.action === 'write') {
+        bodyHtml = `<pre style="margin:0;padding:10px 12px;background:var(--card-bg,rgba(127,127,127,0.06));border-radius:0 0 5px 5px;overflow:auto;max-height:300px;font-size:0.78rem;line-height:1.45;white-space:pre-wrap;word-break:break-word;">${escapeHtml(tc.content || '(empty)')}</pre>`;
+    } else if (tc.action === 'edit') {
+        bodyHtml = `<div style="margin:0;padding:10px 12px;background:var(--card-bg,rgba(127,127,127,0.06));border-radius:0 0 5px 5px;overflow:auto;max-height:300px;font-size:0.78rem;line-height:1.45;font-family:var(--bs-font-monospace,monospace);">${renderDiff(tc.old_text, tc.new_text)}</div>`;
+    } else if (tc.action === 'delete') {
+        bodyHtml = '';
+    } else if (tc.action === 'move') {
+        bodyHtml = '';
+    }
+    const sizeBadge = tc.bytes ? `<span style="opacity:0.5;font-size:0.7rem;margin-left:6px;">${tc.bytes.toLocaleString()} B</span>` : '';
+    return `
+        <div style="border:1px solid var(--border-color,#dee2e6);border-radius:5px;margin-bottom:8px;overflow:hidden;">
+            <div style="display:flex;align-items:center;gap:8px;padding:7px 11px;background:var(--card-bg,rgba(127,127,127,0.04));border-bottom:${bodyHtml ? '1px solid var(--border-color,#dee2e6)' : 'none'};">
+                <i class="fas ${m.icon}" style="color:${m.color};"></i>
+                <span style="font-weight:600;font-size:0.85rem;color:${m.color};">${m.label}</span>
+                <span style="font-size:0.82rem;opacity:0.85;word-break:break-all;">${escapeHtml(tc.target || tc.name)}</span>
+                ${sizeBadge}
+            </div>
+            ${bodyHtml}
+        </div>`;
+}
+
+function showDetail(requestId) {
+    fetch(`/request/${requestId}`)
+        .then(r => r.json())
+        .then(data => {
+            document.getElementById('detailReqId').textContent = '#' + data.id;
+            const statusBadge = data.status === 'success'
+                ? '<span class="badge bg-success">success</span>'
+                : '<span class="badge bg-danger">error</span>';
+            const tokPerSec = (data.duration > 0 && data.completion_tokens > 0)
+                ? (data.completion_tokens / (data.duration / 1000)).toFixed(1) + ' tok/s'
+                : '—';
+            const ratio = (data.total_tokens > 0)
+                ? Math.round((data.completion_tokens / data.total_tokens) * 100) + '% out'
+                : '—';
+            const errorBanner = data.error
+                ? `<div style="background:rgba(220,53,69,0.12);border:1px solid rgba(220,53,69,0.4);color:#dc3545;padding:8px 12px;border-radius:5px;margin-bottom:12px;font-size:0.85rem;">
+                       <strong><i class="fas fa-exclamation-triangle me-1"></i>Error:</strong> ${data.error}
+                   </div>`
+                : '';
+            const toolsUsed = (data.tools_used || []).filter(Boolean);
+            const toolsAvail = (data.tools_available || []).filter(Boolean);
+            const changes = (data.tool_calls || []);
+            const changesHtml = changes.length ? `
+                <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border-color,#dee2e6);">
+                    <div style="font-size:0.65rem;text-transform:uppercase;letter-spacing:0.05em;opacity:0.55;margin-bottom:8px;">
+                        Changes &amp; actions <span style="opacity:0.5;">(${changes.length})</span>
+                    </div>
+                    ${changes.map(renderChange).join('')}
+                </div>` : '';
+
+            document.getElementById('detailContent').innerHTML = `
+                ${errorBanner}
+
+                <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:14px;padding-bottom:11px;border-bottom:1px solid var(--border-color,#dee2e6);">
+                    <span class="badge bg-primary" style="font-size:0.8rem;">${data.model}</span>
+                    <span class="badge bg-secondary">${data.tier}</span>
+                    ${statusBadge}
+                    ${data.stop_reason ? `<span class="badge bg-info">${data.stop_reason}</span>` : ''}
+                    <span style="margin-left:auto;opacity:0.7;font-size:0.8rem;">
+                        <i class="fas fa-user me-1"></i>${data.user}
+                        &nbsp;·&nbsp;
+                        <i class="far fa-clock me-1"></i>${fmtTime(data.timestamp)}
+                    </span>
+                </div>
+
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:8px;margin-bottom:14px;">
+                    ${stat('Prompt tokens', fmtNum(data.prompt_tokens), {large:true})}
+                    ${stat('Completion tokens', fmtNum(data.completion_tokens), {large:true})}
+                    ${stat('Total tokens', fmtNum(data.total_tokens), {large:true})}
+                    ${stat('Duration', fmtMs(data.duration), {large:true})}
+                    ${stat('Throughput', tokPerSec)}
+                    ${stat('Output ratio', ratio)}
+                    ${stat('Messages sent', fmtNum(data.messages_sent))}
+                    ${stat('Budget dropped', fmtNum(data.budget_dropped))}
+                    ${stat('Tool round', fmtNum(data.tool_round))}
+                    ${stat('Endpoint', data.endpoint || '—')}
+                </div>
+
+                <div style="margin-bottom:14px;">
+                    <div style="font-size:0.65rem;text-transform:uppercase;letter-spacing:0.05em;opacity:0.55;margin-bottom:5px;">Query / Summary</div>
+                    <pre style="margin:0;padding:10px 12px;background:var(--card-bg,rgba(127,127,127,0.06));border:1px solid var(--border-color,#dee2e6);border-radius:5px;max-height:180px;overflow:auto;white-space:pre-wrap;word-break:break-word;font-size:0.78rem;line-height:1.4;">${data.query || '(none)'}</pre>
+                </div>
+
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+                    <div>
+                        <div style="font-size:0.65rem;text-transform:uppercase;letter-spacing:0.05em;opacity:0.55;margin-bottom:5px;">
+                            Tools used <span style="opacity:0.5;">(${toolsUsed.length})</span>
+                        </div>
+                        <div style="display:flex;flex-wrap:wrap;gap:4px;">
+                            ${toolsUsed.length
+                                ? toolsUsed.map(t => `<span class="badge bg-info">${t}</span>`).join('')
+                                : '<span style="opacity:0.4;font-size:0.85rem;">none</span>'}
+                        </div>
+                    </div>
+                    <div>
+                        <div style="font-size:0.65rem;text-transform:uppercase;letter-spacing:0.05em;opacity:0.55;margin-bottom:5px;">
+                            Tools available <span style="opacity:0.5;">(${toolsAvail.length})</span>
+                        </div>
+                        <div style="display:flex;flex-wrap:wrap;gap:4px;">
+                            ${toolsAvail.length
+                                ? toolsAvail.map(t => `<span class="badge bg-secondary" style="opacity:0.75;">${t}</span>`).join('')
+                                : '<span style="opacity:0.4;font-size:0.85rem;">none</span>'}
+                        </div>
+                    </div>
+                </div>
+
+                ${changesHtml}
+            `;
+            document.getElementById('detailModal').style.display = 'flex';
+        })
+        .catch(err => console.error('Error loading request detail:', err));
+}
+
+function closeDetailModal() {
+    document.getElementById('detailModal').style.display = 'none';
+}
+
+// ESC closes the modal
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') closeDetailModal();
+});
+</script>
+
 {% endblock %}

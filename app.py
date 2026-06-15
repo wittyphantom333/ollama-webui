@@ -3,6 +3,9 @@ from flask_login import LoginManager, login_required, current_user
 import requests
 import json
 import os
+import time
+import hashlib
+from threading import Lock
 from dotenv import load_dotenv
 import base64
 from flask_wtf.csrf import CSRFProtect
@@ -31,11 +34,36 @@ def load_user(user_id):
 # Register blueprints
 from auth import auth_bp
 from api_routes import api_bp
+from oauth_routes import oauth_bp
 app.register_blueprint(auth_bp)
 app.register_blueprint(api_bp)
+app.register_blueprint(oauth_bp)
 
 # Exempt proxy-facing API endpoints from CSRF (they use API keys)
 csrf.exempt(api_bp)
+
+# --- Request timing (logs slow routes so we can spot regressions) ---
+import logging
+_perf_log = app.logger
+_SLOW_REQUEST_MS = int(os.getenv('SLOW_REQUEST_MS', '250'))
+
+@app.before_request
+def _perf_start():
+    request._perf_t0 = time.monotonic()
+
+@app.after_request
+def _perf_end(response):
+    t0 = getattr(request, '_perf_t0', None)
+    if t0 is not None:
+        dur_ms = (time.monotonic() - t0) * 1000.0
+        if dur_ms >= _SLOW_REQUEST_MS:
+            _perf_log.warning(
+                'slow %s %s -> %d in %.0fms (%s bytes)',
+                request.method, request.path, response.status_code, dur_ms,
+                response.calculate_content_length() or '?',
+            )
+        response.headers['X-Response-Time-Ms'] = f'{dur_ms:.1f}'
+    return response
 
 # Create tables on first run
 with app.app_context():
@@ -60,18 +88,95 @@ def ollama_headers():
 PORT = int(os.getenv('PORT', 5050))
 HOST = os.getenv('HOST', '127.0.0.1')
 
+# ---------------------------------------------------------------------------
+# Ollama call discipline
+# ---------------------------------------------------------------------------
+# Every requests.* call to Ollama must specify a timeout. Without one, an
+# Ollama instance that's busy generating will block the call indefinitely,
+# and with the dev Flask server (or even gunicorn under load) that stalls
+# the entire portal. Metadata calls (/version, /tags, /ps, /show) are
+# expected to be sub-second; we fail fast and fall back to cached or empty
+# data. Mutations (pull/create/delete/unload) get generous budgets because
+# they can legitimately take a while. Inference (chat/generate) gets the
+# longest budget but still bounded so a stuck request doesn't pin a worker.
+OLLAMA_META_TIMEOUT = 3        # /version /tags /ps /show
+OLLAMA_UNLOAD_TIMEOUT = 10     # /generate with keep_alive=0
+OLLAMA_DELETE_TIMEOUT = 30     # /delete
+OLLAMA_INFER_TIMEOUT = 600     # /chat /generate (non-streaming)
+OLLAMA_CREATE_TIMEOUT = 600    # /create (non-streaming)
+OLLAMA_PULL_TIMEOUT = 900      # /pull (non-streaming, large downloads)
+OLLAMA_STREAM_CONNECT = 5      # streaming endpoints: connect-only timeout
+GITHUB_TIMEOUT = 5             # api.github.com release lookups
+
+# In-process TTL cache for the cheap metadata calls hammered by every page
+# load. Each gunicorn worker caches independently — cross-worker drift is
+# bounded by the (short) TTLs and invisible to users. Keyed by
+# method+path+body so /show calls cache per-model.
+_OLLAMA_TTLS = {
+    '/version': 300,   # changes only on Ollama upgrade
+    '/tags':    30,    # model list
+    '/ps':      5,     # running models — stay fresh
+    '/show':    60,    # per-model metadata
+}
+_OLLAMA_CACHE_MAX = 256
+_ollama_cache = {}   # key -> (data, expiry_monotonic)
+_ollama_cache_lock = Lock()
+
+def _cache_key(method, path, body):
+    if body:
+        body_hash = hashlib.md5(
+            json.dumps(body, sort_keys=True).encode()
+        ).hexdigest()
+    else:
+        body_hash = ''
+    return f"{method}:{path}:{body_hash}"
+
+def cached_ollama(path, method='GET', body=None, ttl=None):
+    """Bounded, cached Ollama metadata call.
+
+    Returns the parsed JSON dict on success, or None on timeout / non-200 /
+    connection error / JSON-decode error. Callers must handle None by
+    rendering a degraded page instead of treating it as success.
+
+    TTL is per-path (see _OLLAMA_TTLS) or `ttl` override. Cache is shared
+    across requests within one worker process.
+    """
+    if ttl is None:
+        ttl = _OLLAMA_TTLS.get(path, 30)
+    key = _cache_key(method, path, body)
+    now = time.monotonic()
+    with _ollama_cache_lock:
+        hit = _ollama_cache.get(key)
+        if hit and hit[1] > now:
+            return hit[0]
+    try:
+        url = OLLAMA_API_URL + path
+        headers = ollama_headers()
+        if method == 'GET':
+            resp = requests.get(url, headers=headers, timeout=OLLAMA_META_TIMEOUT)
+        else:
+            resp = requests.post(url, headers=headers, json=body or {}, timeout=OLLAMA_META_TIMEOUT)
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+    except (requests.Timeout, requests.RequestException, ValueError):
+        return None
+    with _ollama_cache_lock:
+        _ollama_cache[key] = (data, now + ttl)
+        # Bounded prune — drop the half closest to expiry when we overflow.
+        if len(_ollama_cache) > _OLLAMA_CACHE_MAX:
+            sorted_keys = sorted(_ollama_cache.items(), key=lambda kv: kv[1][1])
+            for k, _ in sorted_keys[: _OLLAMA_CACHE_MAX // 2]:
+                _ollama_cache.pop(k, None)
+    return data
+
 @app.route('/')
 @login_required
 def index():
-    current_version = "Unknown"
-    # Get current version from Ollama API
-    try:
-        response = requests.get(f"{OLLAMA_API_URL}/version", headers=ollama_headers())
-        if response.status_code == 200:
-            version_data = response.json()
-            current_version = version_data.get('version', 'Unknown')
-    except Exception:
-        pass
+    # Cached: this fires on every page load; without the cache, even the home
+    # page hangs while Ollama is mid-generation.
+    version_data = cached_ollama('/version')
+    current_version = (version_data or {}).get('version', 'Unknown')
     return render_template('index.html', version=current_version)
 
 @app.route('/models')
@@ -80,9 +185,8 @@ def models():
     try:
         from datetime import datetime
         
-        response = requests.get(f"{OLLAMA_API_URL}/tags", headers=ollama_headers())
-        if response.status_code == 200:
-            models_data = response.json()
+        models_data = cached_ollama('/tags')
+        if models_data is not None:
             models_list = models_data.get('models', [])
             
             # Calculate how long ago each model was modified
@@ -127,7 +231,7 @@ def models():
             
             return render_template('models.html', models=models_list, sort_by=sort_by, sort_order=sort_order)
         else:
-            flash(f"Error fetching models: {response.status_code}", "danger")
+            flash("Ollama did not respond in time. Showing an empty model list.", "warning")
             return render_template('models.html', models=[], sort_by='name', sort_order='asc')
     except Exception as e:
         flash(f"Error connecting to Ollama API: {str(e)}", "danger")
@@ -136,27 +240,23 @@ def models():
 @app.route('/models/<path:model_name>')
 @login_required
 def model_detail(model_name):
-    try:
-        response = requests.post(f"{OLLAMA_API_URL}/show", headers=ollama_headers(), json={"model": model_name})
-        if response.status_code == 200:
-            model_info = response.json()
-            return render_template('model_detail.html', model=model_info, model_name=model_name)
-        else:
-            flash(f"Error fetching model details: {response.status_code}", "danger")
-            return redirect(url_for('models'))
-    except Exception as e:
-        flash(f"Error connecting to Ollama API: {str(e)}", "danger")
+    model_info = cached_ollama('/show', method='POST', body={"model": model_name})
+    if model_info is None:
+        flash("Ollama did not respond in time. Try again in a moment.", "warning")
         return redirect(url_for('models'))
+    return render_template('model_detail.html', model=model_info, model_name=model_name)
 
 @app.route('/models/delete/<path:model_name>', methods=['POST'])
 @login_required
 def delete_model(model_name):
     try:
-        response = requests.delete(f"{OLLAMA_API_URL}/delete", headers=ollama_headers(), json={"model": model_name})
+        response = requests.delete(f"{OLLAMA_API_URL}/delete", headers=ollama_headers(), json={"model": model_name}, timeout=OLLAMA_DELETE_TIMEOUT)
         if response.status_code == 200:
             flash(f"Model {model_name} deleted successfully", "success")
         else:
             flash(f"Error deleting model: {response.status_code}", "danger")
+    except requests.Timeout:
+        flash("Delete request timed out — Ollama may still be processing it.", "warning")
     except Exception as e:
         flash(f"Error connecting to Ollama API: {str(e)}", "danger")
     return redirect(url_for('models'))
@@ -166,11 +266,13 @@ def delete_model(model_name):
 def update_model(model_name):
     try:
         # Re-pull the model to get the latest version
-        response = requests.post(f"{OLLAMA_API_URL}/pull", headers=ollama_headers(), json={"model": model_name, "stream": False})
+        response = requests.post(f"{OLLAMA_API_URL}/pull", headers=ollama_headers(), json={"model": model_name, "stream": False}, timeout=OLLAMA_PULL_TIMEOUT)
         if response.status_code == 200:
             flash(f"Model {model_name} updated successfully", "success")
         else:
             flash(f"Error updating model: {response.status_code}", "danger")
+    except requests.Timeout:
+        flash("Pull timed out after 15 minutes. The download may still complete in the background; check again shortly.", "warning")
     except Exception as e:
         flash(f"Error connecting to Ollama API: {str(e)}", "danger")
     return redirect(url_for('models'))
@@ -181,11 +283,14 @@ def pull_model():
     if request.method == 'POST':
         model_name = request.form.get('model_name')
         try:
-            response = requests.post(f"{OLLAMA_API_URL}/pull", headers=ollama_headers(), json={"model": model_name, "stream": False})
+            response = requests.post(f"{OLLAMA_API_URL}/pull", headers=ollama_headers(), json={"model": model_name, "stream": False}, timeout=OLLAMA_PULL_TIMEOUT)
             if response.status_code == 200:
                 flash(f"Model {model_name} pulled successfully", "success")
             else:
                 flash(f"Error pulling model: {response.status_code}", "danger")
+            return redirect(url_for('models'))
+        except requests.Timeout:
+            flash("Pull timed out after 15 minutes. The download may still complete in the background.", "warning")
             return redirect(url_for('models'))
         except Exception as e:
             flash(f"Error connecting to Ollama API: {str(e)}", "danger")
@@ -195,17 +300,11 @@ def pull_model():
 @app.route('/create', methods=['GET'])
 @login_required
 def create_model_page():
-    try:
-        response = requests.get(f"{OLLAMA_API_URL}/tags", headers=ollama_headers())
-        if response.status_code == 200:
-            models_data = response.json()
-            return render_template('create_model.html', models=models_data.get('models', []))
-        else:
-            flash(f"Error fetching models: {response.status_code}", "danger")
-            return render_template('create_model.html', models=[])
-    except Exception as e:
-        flash(f"Error connecting to Ollama API: {str(e)}", "danger")
+    tags_data = cached_ollama('/tags')
+    if tags_data is None:
+        flash("Ollama did not respond in time. Showing an empty model list.", "warning")
         return render_template('create_model.html', models=[])
+    return render_template('create_model.html', models=tags_data.get('models', []))
 
 @app.route('/create-model', methods=['GET', 'POST'])
 @login_required
@@ -279,7 +378,7 @@ def create_model():
             return Response(stream_create_model(payload), mimetype='text/event-stream')
         else:
             # Call Ollama API to create the model (non-streaming)
-            response = requests.post(f"{OLLAMA_API_URL}/create", headers=ollama_headers(), json=payload)
+            response = requests.post(f"{OLLAMA_API_URL}/create", headers=ollama_headers(), json=payload, timeout=OLLAMA_CREATE_TIMEOUT)
             
             if response.status_code == 200:
                 flash(f"Model {model_name} created successfully", "success")
@@ -287,6 +386,9 @@ def create_model():
                 flash(f"Error creating model: {response.status_code} - {response.text}", "danger")
             
             return redirect(url_for('models'))
+    except requests.Timeout:
+        flash("Create request timed out after 10 minutes. The model may still be building — refresh the model list shortly.", "warning")
+        return redirect(url_for('models'))
     except Exception as e:
         flash(f"Error connecting to Ollama API: {str(e)}", "danger")
         return redirect(url_for('create_model_page'))
@@ -299,7 +401,8 @@ def stream_create_model(payload):
             f"{OLLAMA_API_URL}/create",
             headers=ollama_headers(),
             json=payload,
-            stream=True
+            stream=True,
+            timeout=(OLLAMA_STREAM_CONNECT, None)
         )
         
         if response.status_code != 200:
@@ -329,9 +432,8 @@ def running_models():
     try:
         from datetime import datetime
         
-        response = requests.get(f"{OLLAMA_API_URL}/ps", headers=ollama_headers())
-        if response.status_code == 200:
-            models_data = response.json()
+        models_data = cached_ollama('/ps')
+        if models_data is not None:
             models = models_data.get('models', [])
             
             # Add expires_in calculation
@@ -367,7 +469,7 @@ def running_models():
             
             return render_template('running_models.html', models=models)
         else:
-            flash(f"Error fetching running models: {response.status_code}", "danger")
+            flash("Ollama did not respond in time. Try again in a moment.", "warning")
             return render_template('running_models.html', models=[])
     except Exception as e:
         flash(f"Error connecting to Ollama API: {str(e)}", "danger")
@@ -383,12 +485,14 @@ def unload_model(model_name):
             "prompt": "",
             "keep_alive": "0"
         }
-        response = requests.post(f"{OLLAMA_API_URL}/generate", headers=ollama_headers(), json=payload)
+        response = requests.post(f"{OLLAMA_API_URL}/generate", headers=ollama_headers(), json=payload, timeout=OLLAMA_UNLOAD_TIMEOUT)
 
         if response.status_code == 200:
             flash(f"Model {model_name} unloaded successfully", "success")
         else:
             flash(f"Error unloading model: {response.status_code}", "danger")
+    except requests.Timeout:
+        flash("Unload request timed out. The model may still be unloading in the background.", "warning")
     except Exception as e:
         flash(f"Error connecting to Ollama API: {str(e)}", "danger")
 
@@ -398,17 +502,11 @@ def unload_model(model_name):
 @login_required
 def chat():
     # Get available models for the dropdown
-    try:
-        response = requests.get(f"{OLLAMA_API_URL}/tags", headers=ollama_headers())
-        if response.status_code == 200:
-            models_data = response.json()
-            return render_template('chat.html', models=models_data.get('models', []))
-        else:
-            flash(f"Error fetching models: {response.status_code}", "danger")
-            return render_template('chat.html', models=[])
-    except Exception as e:
-        flash(f"Error connecting to Ollama API: {str(e)}", "danger")
+    tags_data = cached_ollama('/tags')
+    if tags_data is None:
+        flash("Ollama did not respond in time. Model list may be empty.", "warning")
         return render_template('chat.html', models=[])
+    return render_template('chat.html', models=tags_data.get('models', []))
 
 @app.route('/api/chat', methods=['POST'])
 @login_required
@@ -429,7 +527,8 @@ def api_chat():
         response = requests.post(
             f"{OLLAMA_API_URL}/chat",
             headers=ollama_headers(),
-            json={"model": model, "messages": messages, "stream": False, "keep_alive": -1}
+            json={"model": model, "messages": messages, "stream": False, "keep_alive": -1},
+            timeout=OLLAMA_INFER_TIMEOUT
         )
         
         if response.status_code == 200:
@@ -442,6 +541,8 @@ def api_chat():
             })
         else:
             return jsonify({"error": f"Error from Ollama API: {response.status_code}"}), 500
+    except requests.Timeout:
+        return jsonify({"error": "Ollama did not respond within the timeout. The model may be loading or busy."}), 504
     except Exception as e:
         return jsonify({"error": f"Error connecting to Ollama API: {str(e)}"}), 500
 
@@ -454,7 +555,8 @@ def stream_chat_response(model, messages):
                 f"{OLLAMA_API_URL}/chat",
                 headers=ollama_headers(),
                 json={"model": model, "messages": messages, "stream": True, "keep_alive": -1},
-                stream=True
+                stream=True,
+                timeout=(OLLAMA_STREAM_CONNECT, None)
             )
             
             if response.status_code != 200:
@@ -487,17 +589,11 @@ def stream_chat_response(model, messages):
 @login_required
 def generate():
     # Get available models for the dropdown
-    try:
-        response = requests.get(f"{OLLAMA_API_URL}/tags", headers=ollama_headers())
-        if response.status_code == 200:
-            models_data = response.json()
-            return render_template('generate.html', models=models_data.get('models', []))
-        else:
-            flash(f"Error fetching models: {response.status_code}", "danger")
-            return render_template('generate.html', models=[])
-    except Exception as e:
-        flash(f"Error connecting to Ollama API: {str(e)}", "danger")
+    tags_data = cached_ollama('/tags')
+    if tags_data is None:
+        flash("Ollama did not respond in time. Model list may be empty.", "warning")
         return render_template('generate.html', models=[])
+    return render_template('generate.html', models=tags_data.get('models', []))
 
 @app.route('/api/generate', methods=['POST'])
 @login_required
@@ -549,13 +645,15 @@ def api_generate():
             payload["options"] = processed_options
     
     try:
-        response = requests.post(f"{OLLAMA_API_URL}/generate", headers=ollama_headers(), json=payload)
+        response = requests.post(f"{OLLAMA_API_URL}/generate", headers=ollama_headers(), json=payload, timeout=OLLAMA_INFER_TIMEOUT)
         
         if response.status_code == 200:
             result = response.json()
             return jsonify(result)
         else:
             return jsonify({"error": f"Error from Ollama API: {response.status_code}"}), 500
+    except requests.Timeout:
+        return jsonify({"error": "Ollama did not respond within the timeout. The model may be loading or busy."}), 504
     except Exception as e:
         return jsonify({"error": f"Error connecting to Ollama API: {str(e)}"}), 500
 
@@ -582,20 +680,16 @@ def version():
     release_date = "Unknown"
     changelog_markdown = None
 
-    # Get current version from Ollama API
-    try:
-        response = requests.get(f"{OLLAMA_API_URL}/version", headers=ollama_headers())
-        if response.status_code == 200:
-            version_data = response.json()
-            current_version = version_data.get('version', 'Unknown')
-        else:
-            flash(f"Error fetching version: {response.status_code}", "danger")
-    except Exception as e:
-        flash(f"Error connecting to Ollama API: {str(e)}", "danger")
+    # Get current version from Ollama API (cached)
+    version_data = cached_ollama('/version')
+    if version_data:
+        current_version = version_data.get('version', 'Unknown')
+    else:
+        flash("Ollama did not respond when fetching version.", "warning")
 
     # Get latest version from GitHub releases
     try:
-        github_response = requests.get("https://api.github.com/repos/ollama/ollama/releases/latest")
+        github_response = requests.get("https://api.github.com/repos/ollama/ollama/releases/latest", timeout=GITHUB_TIMEOUT)
         if github_response.status_code == 200:
             github_data = github_response.json()
             latest_version = github_data.get('tag_name', 'Unknown')
@@ -654,19 +748,15 @@ def version():
 def check_updates():
     """API endpoint to check for available updates"""
     try:
-        # Get current version
-        current_version = "Unknown"
-        try:
-            response = requests.get(f"{OLLAMA_API_URL}/version", headers=ollama_headers())
-            if response.status_code == 200:
-                version_data = response.json()
-                current_version = version_data.get('version', 'Unknown')
-        except Exception as e:
-            return jsonify({"error": f"Error connecting to Ollama API: {str(e)}"}), 500
+        # Get current version (cached)
+        version_data = cached_ollama('/version')
+        if version_data is None:
+            return jsonify({"error": "Ollama is unreachable or busy."}), 504
+        current_version = version_data.get('version', 'Unknown')
         
         # Get latest version from GitHub
         try:
-            github_response = requests.get("https://api.github.com/repos/ollama/ollama/releases/latest")
+            github_response = requests.get("https://api.github.com/repos/ollama/ollama/releases/latest", timeout=GITHUB_TIMEOUT)
             if github_response.status_code == 200:
                 github_data = github_response.json()
                 latest_version = github_data.get('tag_name', 'Unknown')

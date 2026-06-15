@@ -451,9 +451,13 @@ p.text-muted {
 }
 
 /* Animations */
+/* Opacity-only fade — do NOT use transform here. A transform on .fade-in
+   makes it a containing block for position:fixed descendants (per CSS spec),
+   which breaks modal centering (modals end up offset to wherever .container
+   sits inside the page). */
 @keyframes fadeIn {
-  from { opacity: 0; transform: translateY(5px); }
-  to { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 .fade-in {
