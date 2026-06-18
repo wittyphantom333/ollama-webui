@@ -318,3 +318,21 @@ class OAuthToken(db.Model):
     @property
     def expires_in(self):
         return max(0, int((_aware(self.expires_at) - _utcnow()).total_seconds()))
+
+
+class Feedback(db.Model):
+    """User feedback and bug reports submitted via the /feedback slash command."""
+    __tablename__ = 'feedback'
+
+    id = db.Column(db.Integer, primary_key=True)
+    # Optional: user_id if the API key can be resolved to a user
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True, index=True)
+    # Feedback category: 'feedback' or 'bug'
+    category = db.Column(db.String(20), nullable=True)
+    # Free-form comment submitted by the user
+    comment = db.Column(db.Text, nullable=True)
+    # Structured payload from the CLI (errors, git info, environment, etc.)
+    payload = db.Column(db.Text, nullable=True)
+    # Source API key prefix for tracing (not the full key)
+    key_prefix = db.Column(db.String(20), nullable=True)
+    created_at = db.Column(db.DateTime, default=_utcnow, index=True)

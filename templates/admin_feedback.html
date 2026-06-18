@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}Feedback — Vivus Admin{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h2 class="mb-0"><i class="fas fa-comment-alt me-2"></i>User Feedback</h2>
+    <div class="d-flex gap-2">
+        <a href="{{ url_for('api.admin_feedback') }}" class="btn btn-sm btn-outline-secondary{% if not category_filter %} active{% endif %}">All</a>
+        <a href="{{ url_for('api.admin_feedback', category='feedback') }}" class="btn btn-sm btn-outline-primary{% if category_filter == 'feedback' %} active{% endif %}">Feedback</a>
+        <a href="{{ url_for('api.admin_feedback', category='bug') }}" class="btn btn-sm btn-outline-danger{% if category_filter == 'bug' %} active{% endif %}">Bugs</a>
+    </div>
+</div>
+
+{% if feedbacks %}
+<div class="card">
+    <div class="table-responsive">
+        <table class="table table-hover mb-0">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Date</th>
+                    <th>User</th>
+                    <th>Category</th>
+                    <th>Comment</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for fb in feedbacks %}
+                <tr>
+                    <td class="text-muted small">{{ fb.id }}</td>
+                    <td class="text-nowrap small">{{ fb.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                    <td>
+                        {% if fb.user_id and fb.user_id in users %}
+                            <span class="badge bg-secondary">{{ users[fb.user_id] }}</span>
+                        {% elif fb.key_prefix %}
+                            <span class="text-muted small">{{ fb.key_prefix }}</span>
+                        {% else %}
+                            <span class="text-muted small">anonymous</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if fb.category == 'bug' %}
+                            <span class="badge bg-danger">bug</span>
+                        {% else %}
+                            <span class="badge bg-primary">{{ fb.category or 'feedback' }}</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if fb.comment %}
+                            <span title="{{ fb.comment }}">{{ fb.comment[:120] }}{% if fb.comment|length > 120 %}…{% endif %}</span>
+                        {% else %}
+                            <span class="text-muted fst-italic">no comment</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <button class="btn btn-sm btn-outline-secondary"
+                                data-bs-toggle="collapse"
+                                data-bs-target="#payload-{{ fb.id }}"
+                                title="View raw payload">
+                            <i class="fas fa-code"></i>
+                        </button>
+                    </td>
+                </tr>
+                {% if fb.payload %}
+                <tr class="collapse" id="payload-{{ fb.id }}">
+                    <td colspan="6">
+                        <pre class="bg-dark text-light p-3 rounded small" style="max-height:300px;overflow:auto;white-space:pre-wrap;word-break:break-all;">{{ fb.payload }}</pre>
+                    </td>
+                </tr>
+                {% endif %}
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+{% if pagination.pages > 1 %}
+<nav class="mt-3">
+    <ul class="pagination pagination-sm">
+        {% for p in pagination.iter_pages(left_edge=2, right_edge=2, left_current=2, right_current=3) %}
+            {% if p %}
+                <li class="page-item{% if p == pagination.page %} active{% endif %}">
+                    <a class="page-link" href="{{ url_for('api.admin_feedback', page=p, category=category_filter) }}">{{ p }}</a>
+                </li>
+            {% else %}
+                <li class="page-item disabled"><span class="page-link">…</span></li>
+            {% endif %}
+        {% endfor %}
+    </ul>
+</nav>
+{% endif %}
+
+{% else %}
+<div class="card text-center text-muted py-5">
+    <i class="fas fa-comment-slash fa-2x mb-3"></i>
+    <p>No feedback submissions yet.</p>
+</div>
+{% endif %}
+{% endblock %}

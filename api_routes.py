@@ -14,7 +14,7 @@ from flask import Blueprint, render_template, redirect, url_for, flash, request,
 from flask_login import login_required, current_user
 from models import (
     db, ApiKey, UsageRecord, SiteSettings, CloudProvider, ToolCall,
-    OAuthAuthCode, OAuthToken, OAUTH_ALLOWED_CLIENT_IDS, OAUTH_GRANTED_SCOPE,
+    OAuthAuthCode, OAuthToken, OAUTH_ALLOWED_CLIENT_IDS, OAUTH_GRANTED_SCOPE, Feedback,
 )
 
 api_bp = Blueprint('api', __name__, template_folder='templates')
@@ -185,6 +185,72 @@ def ingest_metrics():
     db.session.commit()
 
     return jsonify({'ok': True}), 200
+
+
+# ---------------------------------------------------------------------------
+# Proxy-facing API — feedback ingestion
+# ---------------------------------------------------------------------------
+
+@api_bp.route('/api/v1/feedback', methods=['POST'])
+def ingest_feedback():
+    """Called by the proxy when a user submits /feedback or /bug in the CLI.
+
+    Accepts the raw payload forwarded from the CLI. Resolves the API key to a
+    user when one is present in the payload.
+    """
+    import json as _json
+    data = request.get_json(silent=True) or {}
+
+    # The CLI sends the feedback payload; extract useful top-level fields.
+    # The full payload is stored as-is for admin review.
+    comment = (data.get('comment') or data.get('feedback') or '')[:4000]
+    category = (data.get('category') or data.get('type') or 'feedback')[:20]
+    raw_key = data.get('api_key') or request.headers.get('x-api-key') or ''
+
+    api_key_obj = ApiKey.lookup(raw_key) if raw_key else None
+    user_id = api_key_obj.user_id if api_key_obj else None
+    key_prefix = api_key_obj.key_prefix if api_key_obj else None
+
+    payload_str = _json.dumps(data)[:32000]
+
+    record = Feedback(
+        user_id=user_id,
+        category=category,
+        comment=comment,
+        payload=payload_str,
+        key_prefix=key_prefix,
+    )
+    db.session.add(record)
+    db.session.commit()
+
+    return jsonify({'ok': True}), 200
+
+
+# ---------------------------------------------------------------------------
+# Portal UI — admin feedback viewer
+# ---------------------------------------------------------------------------
+
+@api_bp.route('/admin/feedback')
+@login_required
+def admin_feedback():
+    if not current_user.is_admin:
+        flash('Admin only.', 'danger')
+        return redirect(url_for('api.usage'))
+    from models import User
+    page = request.args.get('page', 1, type=int)
+    category = request.args.get('category', '')
+    q = Feedback.query.order_by(Feedback.created_at.desc())
+    if category:
+        q = q.filter(Feedback.category == category)
+    pagination = q.paginate(page=page, per_page=25, error_out=False)
+    users = {u.id: u.username for u in User.query.all()}
+    return render_template(
+        'admin_feedback.html',
+        feedbacks=pagination.items,
+        pagination=pagination,
+        users=users,
+        category_filter=category,
+    )
 
 
 # ---------------------------------------------------------------------------
