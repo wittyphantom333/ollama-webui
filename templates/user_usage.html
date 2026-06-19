@@ -11,8 +11,26 @@
 .tool-bar .cnt { font-size: .75rem; color: #888; margin-left: .5rem; }
 .session-card { border-left: 3px solid #0d6efd; margin-bottom: .75rem; }
 .session-card.has-errors { border-left-color: #dc3545; }
-.session-queries { font-size: .8rem; color: #555; line-height: 1.5; }
-.session-meta { font-size: .75rem; color: #888; }
+/* Theme-aware so the session query text stays readable on the dark card.
+   #555 (hardcoded) was nearly invisible on the dark background. */
+.session-queries { font-size: .8rem; color: #4b5563; line-height: 1.5; }
+.session-meta { font-size: .75rem; color: #6b7280; }
+[data-theme="dark"] .session-queries { color: #cbd5e1; }
+[data-theme="dark"] .session-meta { color: #9ca3af; }
+[data-theme="dark"] .session-card { background: #1e293b; }
+
+/* Request Log hover: keep ALL nested text (incl. <small> and .text-muted)
+   readable when the row is highlighted. Bootstrap's hover recolors the row
+   but nested utility-colored text can wash out. */
+.table-hover tbody tr:hover td,
+.table-hover tbody tr:hover td small {
+    color: #1f2937;
+}
+[data-theme="dark"] .table-hover tbody tr:hover td,
+[data-theme="dark"] .table-hover tbody tr:hover td small,
+[data-theme="dark"] .table-hover tbody tr:hover td .text-muted {
+    color: #f3f4f6 !important;
+}
 </style>
 {% endblock %}
 {% block content %}
