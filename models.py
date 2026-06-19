@@ -23,6 +23,12 @@ class User(UserMixin, db.Model):
     is_active_user = db.Column(db.Boolean, default=True, nullable=False)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
+    # Per-user feature flags delivered to the CLI via the bootstrap endpoint
+    # (mirrored into the CLI's GrowthBook config overrides). Example:
+    #   {"vivus_cloud_subagent_model": "minimax-m3:cloud"}
+    # Empty/absent = standard user (subagents inherit the local model).
+    feature_flags = db.Column(db.JSON, default=dict, nullable=False)
+
     api_keys = db.relationship('ApiKey', backref='user', lazy='dynamic',
                                 cascade='all, delete-orphan')
     usage_records = db.relationship('UsageRecord', backref='user', lazy='dynamic',

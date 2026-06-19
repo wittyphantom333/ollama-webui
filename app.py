@@ -68,6 +68,22 @@ def _perf_end(response):
 # Create tables on first run
 with app.app_context():
     db.create_all()
+    # Idempotent column add for existing DBs. db.create_all() creates missing
+    # tables but never ALTERs an existing one, so a newly added model column
+    # (users.feature_flags) must be backfilled here. SQLite ADD COLUMN is fast
+    # and safe; NOT NULL requires a constant default on a populated table.
+    from sqlalchemy import inspect as _sa_inspect, text as _sa_text
+    try:
+        _user_cols = {c['name'] for c in _sa_inspect(db.engine).get_columns('users')}
+        if 'feature_flags' not in _user_cols:
+            db.session.execute(_sa_text(
+                "ALTER TABLE users ADD COLUMN feature_flags JSON NOT NULL DEFAULT '{}'"
+            ))
+            db.session.commit()
+            app.logger.info('migrated: added users.feature_flags column')
+    except Exception as _mig_err:  # pragma: no cover - best-effort migration
+        db.session.rollback()
+        app.logger.warning('schema migration check failed: %s', _mig_err)
 
 # Ollama API base URL
 OLLAMA_API_BASE = os.getenv('OLLAMA_API_BASE', 'http://127.0.0.1:11434')

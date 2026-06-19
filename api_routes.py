@@ -20,6 +20,39 @@ from models import (
 api_bp = Blueprint('api', __name__, template_folder='templates')
 
 
+# Per-user "cloud subagents" feature. When enabled for a user, the CLI routes
+# all subagents to the chosen off-box cloud model (so fan-out parallelizes
+# without contending for the single local GPU). The first entry is the default
+# offered in the admin UI. Keep in sync with the proxy's cloud model table.
+CLOUD_SUBAGENT_FLAG = 'vivus_cloud_subagent_model'
+CLOUD_SUBAGENT_MODELS = [
+    'minimax-m3:cloud',
+    'qwen3-coder-next:cloud',
+    'glm-5.2:cloud',
+    'deepseek-v4-pro:cloud',
+    'kimi-k2.7-code:cloud',
+]
+
+
+def _user_from_request():
+    """Resolve the calling user from an x-api-key header or OAuth bearer token.
+
+    Mirrors the dual-auth resolution used by the feedback endpoints — the proxy
+    forwards whichever credential the CLI used. Returns a User or None.
+    """
+    raw_key = request.headers.get('x-api-key') or ''
+    api_key_obj = ApiKey.lookup(raw_key) if raw_key else None
+    if api_key_obj:
+        return api_key_obj.user
+    auth_header = request.headers.get('Authorization', '')
+    if auth_header.lower().startswith('bearer '):
+        token_obj = OAuthToken.lookup_access(auth_header[7:].strip())
+        if token_obj:
+            from models import User
+            return User.query.get(token_obj.user_id)
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Portal UI — API key management
 # ---------------------------------------------------------------------------
@@ -334,6 +367,25 @@ def ingest_transcript_share():
     db.session.commit()
 
     return jsonify({'transcript_id': f'ts_{record.id}', 'ok': True}), 200
+
+
+# ---------------------------------------------------------------------------
+# Proxy-facing API — per-user feature flags
+# ---------------------------------------------------------------------------
+
+@api_bp.route('/api/vivus_cli_feature_flags', methods=['GET'])
+def vivus_cli_feature_flags():
+    """Called by the proxy's /api/vivus_cli/bootstrap to fetch this user's
+    per-user feature flags (e.g. cloud subagents).
+
+    Auth via x-api-key or OAuth bearer — the proxy forwards whichever the CLI
+    used. The CLI mirrors the returned flags into its GrowthBook config
+    overrides. Unknown caller → empty flags so users fall back to safe local
+    defaults (never auto-enabling cloud usage).
+    """
+    user = _user_from_request()
+    flags = (user.feature_flags or {}) if user else {}
+    return jsonify({'feature_flags': flags})
 
 
 # ---------------------------------------------------------------------------
@@ -762,7 +814,12 @@ def admin_users():
         return redirect(url_for('index'))
     from models import User
     users = User.query.order_by(User.created_at.desc()).all()
-    return render_template('admin_users.html', users=users)
+    return render_template(
+        'admin_users.html',
+        users=users,
+        cloud_subagent_models=CLOUD_SUBAGENT_MODELS,
+        cloud_subagent_flag=CLOUD_SUBAGENT_FLAG,
+    )
 
 
 @api_bp.route('/admin/users/<int:user_id>/toggle', methods=['POST'])
@@ -780,6 +837,37 @@ def toggle_user(user_id):
     db.session.commit()
     status = 'enabled' if user.is_active_user else 'disabled'
     flash(f'User "{user.username}" {status}.', 'info')
+    return redirect(url_for('api.admin_users'))
+
+
+@api_bp.route('/admin/users/<int:user_id>/flags', methods=['POST'])
+@login_required
+def update_user_flags(user_id):
+    """Set or clear a user's per-user feature flags from the admin UI.
+
+    Currently exposes the "cloud subagents" toggle: a non-empty, known cloud
+    model enables the feature for that user; an empty/unknown value disables it
+    (subagents revert to the local model). Delivered to the CLI on next launch
+    via the bootstrap endpoint.
+    """
+    if not current_user.is_admin:
+        flash('Admin access required.', 'danger')
+        return redirect(url_for('index'))
+    from models import User
+    from sqlalchemy.orm.attributes import flag_modified
+    user = User.query.get_or_404(user_id)
+    cloud_model = (request.form.get('cloud_subagent_model') or '').strip()
+    flags = dict(user.feature_flags or {})
+    if cloud_model and cloud_model in CLOUD_SUBAGENT_MODELS:
+        flags[CLOUD_SUBAGENT_FLAG] = cloud_model
+        msg = f'Cloud subagents enabled ({cloud_model}) for "{user.username}".'
+    else:
+        flags.pop(CLOUD_SUBAGENT_FLAG, None)
+        msg = f'Cloud subagents disabled for "{user.username}".'
+    user.feature_flags = flags
+    flag_modified(user, 'feature_flags')  # ensure JSON mutation is persisted
+    db.session.commit()
+    flash(msg, 'info')
     return redirect(url_for('api.admin_users'))
 
 
