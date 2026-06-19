@@ -284,6 +284,8 @@ function actionMeta(action) {
         case 'bash':   return { icon: 'fa-terminal',          color: '#6f42c1', label: 'Bash' };
         case 'delete': return { icon: 'fa-trash',             color: '#dc3545', label: 'Delete' };
         case 'move':   return { icon: 'fa-arrows-left-right', color: '#fd7e14', label: 'Move' };
+        case 'mcp':    return { icon: 'fa-plug',              color: '#20c997', label: 'MCP' };
+        case 'task':   return { icon: 'fa-list-check',        color: '#0dcaf0', label: 'Task' };
         default:       return { icon: 'fa-gear',              color: '#6c757d', label: action || 'Tool' };
     }
 }
@@ -321,6 +323,9 @@ function renderChange(tc, idx) {
         bodyHtml = '';
     } else if (tc.action === 'move') {
         bodyHtml = '';
+    } else if (tc.content || tc.command) {
+        // mcp / task / any other action that carried content — show it verbatim.
+        bodyHtml = `<pre style="margin:0;padding:10px 12px;background:var(--card-bg,rgba(127,127,127,0.06));border-radius:0 0 5px 5px;overflow:auto;max-height:300px;font-size:0.78rem;line-height:1.45;white-space:pre-wrap;word-break:break-word;">${escapeHtml(tc.content || tc.command || '')}</pre>`;
     }
     const sizeBadge = tc.bytes ? `<span style="opacity:0.5;font-size:0.7rem;margin-left:6px;">${tc.bytes.toLocaleString()} B</span>` : '';
     return `
