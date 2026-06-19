@@ -256,6 +256,56 @@ def ingest_feedback():
     return jsonify({'feedback_id': f'fb_{record.id}', 'ok': True}), 200
 
 
+@api_bp.route('/api/v1/transcript_share', methods=['POST'])
+def ingest_transcript_share():
+    """Called by the proxy when a user shares their session transcript from the
+    feedback survey ("vote 1-4" → "share transcript?").
+
+    The CLI sends { content: "<json-string>", appearance_id }. The inner JSON
+    has { trigger, version, platform, transcript, ... }. Stored as a feedback
+    row with category 'transcript_share'. Returns { transcript_id }.
+    """
+    import json as _json
+    data = request.get_json(silent=True) or {}
+
+    inner = {}
+    content = data.get('content')
+    if isinstance(content, str) and content:
+        try:
+            inner = _json.loads(content)
+        except (ValueError, TypeError):
+            inner = {}
+    elif isinstance(content, dict):
+        inner = content
+
+    trigger = (inner.get('trigger') or 'transcript_share')[:40]
+
+    raw_key = request.headers.get('x-api-key') or ''
+    api_key_obj = ApiKey.lookup(raw_key) if raw_key else None
+    user_id = api_key_obj.user_id if api_key_obj else None
+    key_prefix = api_key_obj.key_prefix if api_key_obj else None
+    if user_id is None:
+        auth_header = request.headers.get('Authorization', '')
+        if auth_header.lower().startswith('bearer '):
+            token_obj = OAuthToken.lookup_access(auth_header[7:].strip())
+            if token_obj:
+                user_id = token_obj.user_id
+
+    payload_str = _json.dumps(inner)[:32000]
+
+    record = Feedback(
+        user_id=user_id,
+        category='transcript_share',
+        comment=f'Transcript share ({trigger})',
+        payload=payload_str,
+        key_prefix=key_prefix,
+    )
+    db.session.add(record)
+    db.session.commit()
+
+    return jsonify({'transcript_id': f'ts_{record.id}', 'ok': True}), 200
+
+
 # ---------------------------------------------------------------------------
 # Portal UI — admin feedback viewer
 # ---------------------------------------------------------------------------
