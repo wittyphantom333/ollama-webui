@@ -961,3 +961,60 @@ def oauth_roles():
         'workspace_role': role,
         'organization_name': 'Vivus',
     })
+
+
+def _profile_payload(user):
+    """Build the OAuth profile shape the CLI expects (installOAuthTokens reads
+    account.uuid/email/created_at and organization.uuid).
+
+    organization_type is intentionally left null so the CLI does NOT classify
+    the user as a subscription (vivus_pro/max/...) — that keeps it on the
+    x-api-key inference path the proxy authenticates, rather than sending an
+    OAuth bearer the proxy can't validate.
+    """
+    created = user.created_at.isoformat() if getattr(user, 'created_at', None) else None
+    return {
+        'account': {
+            'uuid': user.account_uuid,
+            'email': user.email,
+            'email_address': user.email,
+            'display_name': user.username,
+            'full_name': user.username,
+            'created_at': created,
+            'has_verified_email': True,
+        },
+        'organization': {
+            'uuid': user.org_uuid,
+            'name': 'Vivus',
+            'organization_type': None,
+            'rate_limit_tier': None,
+            'has_extra_usage_enabled': False,
+            'billing_type': None,
+            'subscription_created_at': None,
+        },
+    }
+
+
+@api_bp.route('/api/oauth/profile', methods=['GET'])
+def oauth_profile():
+    """OAuth profile for a bearer-authenticated CLI session."""
+    user = _oauth_user_from_bearer()
+    if user is None:
+        return jsonify({'error': 'unauthorized'}), 401
+    return jsonify(_profile_payload(user))
+
+
+@api_bp.route('/api/vivus_cli_profile', methods=['GET'])
+def vivus_cli_profile():
+    """Profile lookup for API-key (Console) sessions. Resolves the x-api-key
+    header (or Bearer) to a user and returns the same profile shape."""
+    user = None
+    raw_key = request.headers.get('x-api-key') or ''
+    if raw_key:
+        api_key_obj = ApiKey.lookup(raw_key)
+        user = api_key_obj.user if api_key_obj else None
+    if user is None:
+        user = _oauth_user_from_bearer()
+    if user is None:
+        return jsonify({'error': 'unauthorized'}), 401
+    return jsonify(_profile_payload(user))
