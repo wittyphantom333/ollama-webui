@@ -191,6 +191,36 @@ def ingest_metrics():
 # Proxy-facing API — feedback ingestion
 # ---------------------------------------------------------------------------
 
+def _bounded_payload_json(inner, limit=600000):
+    """Serialize a payload to VALID JSON within `limit` chars.
+
+    Bounds size by trimming the transcript array (dropping the OLDEST messages),
+    never by slicing the JSON string — a raw slice corrupts the JSON and makes
+    the stored transcript unparseable/unreadable.
+    """
+    import json as _json
+    try:
+        s = _json.dumps(inner, ensure_ascii=False)
+    except Exception:
+        return _json.dumps({'_error': 'unserializable payload'})
+    if len(s) <= limit:
+        return s
+    if isinstance(inner, dict) and isinstance(inner.get('transcript'), list):
+        base = {k: v for k, v in inner.items() if k != 'transcript'}
+        total = len(inner['transcript'])
+        keep = list(inner['transcript'])
+        while keep:
+            candidate = {**base, 'transcript': keep,
+                         '_truncated': f'showing last {len(keep)} of {total} messages'}
+            cs = _json.dumps(candidate, ensure_ascii=False)
+            if len(cs) <= limit:
+                return cs
+            keep = keep[max(1, len(keep) // 4):]  # drop oldest ~25%, converge fast
+        base['_truncated'] = 'transcript omitted (too large)'
+        return _json.dumps(base, ensure_ascii=False)[:limit]
+    return s[:limit]
+
+
 @api_bp.route('/api/v1/feedback', methods=['POST'])
 def ingest_feedback():
     """Called by the proxy when a user submits /feedback or /bug in the CLI.
@@ -241,7 +271,7 @@ def ingest_feedback():
                 user_id = token_obj.user_id
 
     # Store the full inner payload (transcript, env, version) for admin review.
-    payload_str = _json.dumps(inner)[:32000]
+    payload_str = _bounded_payload_json(inner)
 
     record = Feedback(
         user_id=user_id,
@@ -291,7 +321,7 @@ def ingest_transcript_share():
             if token_obj:
                 user_id = token_obj.user_id
 
-    payload_str = _json.dumps(inner)[:32000]
+    payload_str = _bounded_payload_json(inner)
 
     record = Feedback(
         user_id=user_id,
@@ -398,11 +428,18 @@ def _parse_feedback_payload(payload_str):
     try:
         data = _json.loads(payload_str)
     except Exception:
+        # Best-effort salvage of top-level scalar meta from a truncated/invalid
+        # payload (e.g. legacy rows stored before bounded serialization).
+        import re as _re
+        for k in ('description', 'platform', 'version', 'datetime'):
+            mm = _re.search(r'"' + k + r'"\s*:\s*"([^"]*)"', payload_str)
+            if mm:
+                out['meta'][k] = mm.group(1)
         return out
     if not isinstance(data, dict):
         return out
     for k in ('trigger', 'description', 'platform', 'version', 'gitRepo',
-              'message_count', 'datetime'):
+              'message_count', 'datetime', '_truncated'):
         if k in data and data[k] not in (None, ''):
             out['meta'][k] = data[k]
     try:
