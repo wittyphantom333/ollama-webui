@@ -56,15 +56,54 @@
                         <button class="btn btn-sm btn-outline-secondary"
                                 data-bs-toggle="collapse"
                                 data-bs-target="#payload-{{ fb.id }}"
-                                title="View raw payload">
-                            <i class="fas fa-code"></i>
+                                title="View details">
+                            <i class="fas fa-comments"></i>
                         </button>
                     </td>
                 </tr>
                 {% if fb.payload %}
+                {% set p = parsed.get(fb.id) %}
                 <tr class="collapse" id="payload-{{ fb.id }}">
                     <td colspan="6">
-                        <pre class="bg-dark text-light p-3 rounded small" style="max-height:300px;overflow:auto;white-space:pre-wrap;word-break:break-all;">{{ fb.payload }}</pre>
+                        {% if p and p.meta %}
+                        <div class="mb-2 small text-muted">
+                            {% for k, v in p.meta.items() %}
+                                {% if k != 'description' %}
+                                <span class="me-3"><strong>{{ k }}:</strong> {{ v }}</span>
+                                {% endif %}
+                            {% endfor %}
+                        </div>
+                        {% endif %}
+
+                        {% if p and p.messages %}
+                        <div class="border rounded p-2 mb-2" style="max-height:500px;overflow:auto;background:rgba(0,0,0,0.15);">
+                            {% for msg in p.messages %}
+                            <div class="mb-2">
+                                <span class="badge {% if msg.role == 'user' %}bg-info text-dark{% elif msg.role == 'assistant' %}bg-success{% else %}bg-secondary{% endif %}">{{ msg.role }}</span>
+                                {% for kind, text in msg.parts %}
+                                    {% if kind == 'text' %}
+                                    <div class="ms-2 mt-1" style="white-space:pre-wrap;word-break:break-word;">{{ text }}</div>
+                                    {% elif kind == 'thinking' %}
+                                    <div class="ms-2 mt-1 fst-italic text-muted" style="white-space:pre-wrap;word-break:break-word;">💭 {{ text }}</div>
+                                    {% elif kind == 'tool_use' %}
+                                    <div class="ms-2 mt-1"><code class="text-warning">🔧 {{ text }}</code></div>
+                                    {% elif kind == 'tool_result' %}
+                                    <div class="ms-2 mt-1 small text-muted" style="white-space:pre-wrap;word-break:break-word;">↩ {{ text }}</div>
+                                    {% endif %}
+                                {% endfor %}
+                            </div>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
+
+                        <button class="btn btn-sm btn-outline-secondary mb-2"
+                                data-bs-toggle="collapse"
+                                data-bs-target="#raw-{{ fb.id }}">
+                            <i class="fas fa-code me-1"></i>Raw JSON
+                        </button>
+                        <div class="collapse" id="raw-{{ fb.id }}">
+                            <pre class="bg-dark text-light p-3 rounded small" style="max-height:300px;overflow:auto;white-space:pre-wrap;word-break:break-all;">{{ p.raw if p else fb.payload }}</pre>
+                        </div>
                     </td>
                 </tr>
                 {% endif %}

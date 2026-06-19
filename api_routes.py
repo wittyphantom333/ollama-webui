@@ -310,6 +310,112 @@ def ingest_transcript_share():
 # Portal UI — admin feedback viewer
 # ---------------------------------------------------------------------------
 
+def _short_json(obj, limit=300):
+    """Compact single-line JSON preview of a tool input/result."""
+    import json as _json
+    try:
+        s = _json.dumps(obj, ensure_ascii=False)
+    except Exception:
+        s = str(obj)
+    s = ' '.join(s.split())
+    return s[:limit] + ('…' if len(s) > limit else '')
+
+
+def _flatten_tool_result(content, limit=600):
+    """Tool results may be a string or a list of {type:text,text} blocks."""
+    if isinstance(content, str):
+        text = content
+    elif isinstance(content, list):
+        parts = []
+        for b in content:
+            if isinstance(b, dict):
+                parts.append(b.get('text') or b.get('content') or '')
+            elif isinstance(b, str):
+                parts.append(b)
+        text = '\n'.join(p for p in parts if p)
+    else:
+        text = '' if content is None else str(content)
+    text = text.strip()
+    return text[:limit] + ('…' if len(text) > limit else '')
+
+
+def _summarize_message(m):
+    """Normalize one transcript message into {role, parts:[(kind, text)]}.
+
+    Handles both flat ({role, content}) and nested ({type, message:{role,content}})
+    shapes, and content as a string or a list of typed blocks.
+    """
+    if not isinstance(m, dict):
+        return None
+    role = m.get('role')
+    content = m.get('content')
+    inner = m.get('message')
+    if role is None and isinstance(inner, dict):
+        role = inner.get('role')
+        content = inner.get('content')
+    if role is None:
+        role = m.get('type')  # 'user' / 'assistant'
+
+    parts = []
+    if isinstance(content, str):
+        if content.strip():
+            parts.append(('text', content.strip()))
+    elif isinstance(content, list):
+        for b in content:
+            if isinstance(b, str):
+                if b.strip():
+                    parts.append(('text', b.strip()))
+                continue
+            if not isinstance(b, dict):
+                continue
+            bt = b.get('type')
+            if bt == 'text':
+                t = (b.get('text') or '').strip()
+                if t:
+                    parts.append(('text', t))
+            elif bt == 'thinking':
+                t = (b.get('thinking') or '').strip()
+                if t:
+                    parts.append(('thinking', t))
+            elif bt == 'tool_use':
+                name = b.get('name', 'tool')
+                parts.append(('tool_use', f"{name}({_short_json(b.get('input', {}))})"))
+            elif bt == 'tool_result':
+                parts.append(('tool_result', _flatten_tool_result(b.get('content'))))
+            elif bt == 'image':
+                parts.append(('text', '[image]'))
+    if not parts:
+        return None
+    return {'role': role or 'unknown', 'parts': parts}
+
+
+def _parse_feedback_payload(payload_str):
+    """Parse a stored feedback payload into displayable meta + conversation."""
+    import json as _json
+    out = {'meta': {}, 'messages': [], 'raw': payload_str or ''}
+    if not payload_str:
+        return out
+    try:
+        data = _json.loads(payload_str)
+    except Exception:
+        return out
+    if not isinstance(data, dict):
+        return out
+    for k in ('trigger', 'description', 'platform', 'version', 'gitRepo',
+              'message_count', 'datetime'):
+        if k in data and data[k] not in (None, ''):
+            out['meta'][k] = data[k]
+    try:
+        out['raw'] = _json.dumps(data, indent=2, ensure_ascii=False)
+    except Exception:
+        pass
+    transcript = data.get('transcript')
+    if isinstance(transcript, list):
+        msgs = [_summarize_message(m) for m in transcript]
+        out['messages'] = [m for m in msgs if m]
+    return out
+
+
 @api_bp.route('/admin/feedback')
 @login_required
 def admin_feedback():
@@ -324,11 +430,13 @@ def admin_feedback():
         q = q.filter(Feedback.category == category)
     pagination = q.paginate(page=page, per_page=25, error_out=False)
     users = {u.id: u.username for u in User.query.all()}
+    parsed = {fb.id: _parse_feedback_payload(fb.payload) for fb in pagination.items}
     return render_template(
         'admin_feedback.html',
         feedbacks=pagination.items,
         pagination=pagination,
         users=users,
+        parsed=parsed,
         category_filter=category,
     )
 
