@@ -195,23 +195,53 @@ def ingest_metrics():
 def ingest_feedback():
     """Called by the proxy when a user submits /feedback or /bug in the CLI.
 
-    Accepts the raw payload forwarded from the CLI. Resolves the API key to a
-    user when one is present in the payload.
+    The CLI sends { "content": "<json-string>" } where the inner JSON has
+    shape { description, platform, version, gitRepo, message_count, datetime,
+    transcript, ... }. The user's actual feedback text is `description`.
+    Returns { feedback_id } — the CLI treats a missing feedback_id as failure.
     """
     import json as _json
     data = request.get_json(silent=True) or {}
 
-    # The CLI sends the feedback payload; extract useful top-level fields.
-    # The full payload is stored as-is for admin review.
-    comment = (data.get('comment') or data.get('feedback') or '')[:4000]
-    category = (data.get('category') or data.get('type') or 'feedback')[:20]
-    raw_key = data.get('api_key') or request.headers.get('x-api-key') or ''
+    # Unwrap the CLI envelope: the real payload is a JSON string in `content`.
+    inner = {}
+    content = data.get('content')
+    if isinstance(content, str) and content:
+        try:
+            inner = _json.loads(content)
+        except (ValueError, TypeError):
+            inner = {}
+    elif isinstance(content, dict):
+        inner = content
+    # Some callers may post the payload directly (no envelope).
+    if not inner:
+        inner = data
 
+    # The user's feedback text lives in `description`.
+    comment = (inner.get('description') or inner.get('comment') or inner.get('feedback') or '')[:4000]
+    category = (inner.get('category') or inner.get('type') or 'feedback')[:20]
+
+    # Resolve the submitting user from the forwarded API key.
+    raw_key = (
+        request.headers.get('x-api-key')
+        or inner.get('api_key')
+        or data.get('api_key')
+        or ''
+    )
     api_key_obj = ApiKey.lookup(raw_key) if raw_key else None
     user_id = api_key_obj.user_id if api_key_obj else None
     key_prefix = api_key_obj.key_prefix if api_key_obj else None
 
-    payload_str = _json.dumps(data)[:32000]
+    # Fall back to the OAuth bearer token for OAuth-authenticated users.
+    if user_id is None:
+        auth_header = request.headers.get('Authorization', '')
+        if auth_header.lower().startswith('bearer '):
+            token_obj = OAuthToken.lookup_access(auth_header[7:].strip())
+            if token_obj:
+                user_id = token_obj.user_id
+
+    # Store the full inner payload (transcript, env, version) for admin review.
+    payload_str = _json.dumps(inner)[:32000]
 
     record = Feedback(
         user_id=user_id,
@@ -223,7 +253,7 @@ def ingest_feedback():
     db.session.add(record)
     db.session.commit()
 
-    return jsonify({'ok': True}), 200
+    return jsonify({'feedback_id': f'fb_{record.id}', 'ok': True}), 200
 
 
 # ---------------------------------------------------------------------------
