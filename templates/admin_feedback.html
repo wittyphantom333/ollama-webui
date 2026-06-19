@@ -1,5 +1,44 @@
 {% extends "base.html" %}
 {% block title %}Feedback — Vivus Admin{% endblock %}
+{% block extra_css %}
+<style>
+  /* Feedback transcript — explicit colors so the conversation stays readable
+     in BOTH themes. Bootstrap sets cell text color via --bs-table-color at
+     high specificity, which otherwise bleeds dark text onto the dark
+     transcript background; these rules override that for the transcript. */
+  .fb-meta { color: #6b7280; }
+  [data-theme="dark"] .fb-meta { color: #9ca3af; }
+  .fb-meta strong { color: #374151; }
+  [data-theme="dark"] .fb-meta strong { color: #d1d5db; }
+
+  .fb-transcript {
+    max-height: 500px;
+    overflow: auto;
+    background: #f8fafc;
+    border-color: #e5e7eb !important;
+  }
+  [data-theme="dark"] .fb-transcript {
+    background: #0f172a;
+    border-color: #374151 !important;
+  }
+
+  /* Message text — force readable color regardless of table hover/cell color */
+  .fb-transcript .fb-text { color: #1f2937; white-space: pre-wrap; word-break: break-word; }
+  [data-theme="dark"] .fb-transcript .fb-text { color: #e5e7eb; }
+
+  .fb-transcript .fb-thinking { color: #6b7280; white-space: pre-wrap; word-break: break-word; }
+  [data-theme="dark"] .fb-transcript .fb-thinking { color: #9ca3af; }
+
+  .fb-transcript .fb-tool { color: #b45309; }
+  [data-theme="dark"] .fb-transcript .fb-tool { color: #fbbf24; }
+
+  .fb-transcript .fb-result { color: #4b5563; white-space: pre-wrap; word-break: break-word; }
+  [data-theme="dark"] .fb-transcript .fb-result { color: #9ca3af; }
+
+  /* Keep hover from recoloring the expanded transcript cell */
+  .table-hover tbody tr.fb-detail:hover { background-color: transparent; }
+</style>
+{% endblock %}
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h2 class="mb-0"><i class="fas fa-comment-alt me-2"></i>User Feedback</h2>
@@ -9,6 +48,7 @@
         <a href="{{ url_for('api.admin_feedback', category='bug') }}" class="btn btn-sm btn-outline-danger{% if category_filter == 'bug' %} active{% endif %}">Bugs</a>
     </div>
 </div>
+
 
 {% if feedbacks %}
 <div class="card">
@@ -63,10 +103,10 @@
                 </tr>
                 {% if fb.payload %}
                 {% set p = parsed.get(fb.id) %}
-                <tr class="collapse" id="payload-{{ fb.id }}">
+                <tr class="collapse fb-detail" id="payload-{{ fb.id }}">
                     <td colspan="6">
                         {% if p and p.meta %}
-                        <div class="mb-2 small text-muted">
+                        <div class="mb-2 small fb-meta">
                             {% for k, v in p.meta.items() %}
                                 {% if k != 'description' %}
                                 <span class="me-3"><strong>{{ k }}:</strong> {{ v }}</span>
@@ -76,19 +116,19 @@
                         {% endif %}
 
                         {% if p and p.messages %}
-                        <div class="border rounded p-2 mb-2" style="max-height:500px;overflow:auto;background:rgba(0,0,0,0.15);">
+                        <div class="border rounded p-2 mb-2 fb-transcript">
                             {% for msg in p.messages %}
                             <div class="mb-2">
                                 <span class="badge {% if msg.role == 'user' %}bg-info text-dark{% elif msg.role == 'assistant' %}bg-success{% else %}bg-secondary{% endif %}">{{ msg.role }}</span>
                                 {% for kind, text in msg.parts %}
                                     {% if kind == 'text' %}
-                                    <div class="ms-2 mt-1" style="white-space:pre-wrap;word-break:break-word;">{{ text }}</div>
+                                    <div class="ms-2 mt-1 fb-text">{{ text }}</div>
                                     {% elif kind == 'thinking' %}
-                                    <div class="ms-2 mt-1 fst-italic text-muted" style="white-space:pre-wrap;word-break:break-word;">💭 {{ text }}</div>
+                                    <div class="ms-2 mt-1 fst-italic fb-thinking">💭 {{ text }}</div>
                                     {% elif kind == 'tool_use' %}
-                                    <div class="ms-2 mt-1"><code class="text-warning">🔧 {{ text }}</code></div>
+                                    <div class="ms-2 mt-1"><code class="fb-tool">🔧 {{ text }}</code></div>
                                     {% elif kind == 'tool_result' %}
-                                    <div class="ms-2 mt-1 small text-muted" style="white-space:pre-wrap;word-break:break-word;">↩ {{ text }}</div>
+                                    <div class="ms-2 mt-1 small fb-result">↩ {{ text }}</div>
                                     {% endif %}
                                 {% endfor %}
                             </div>
