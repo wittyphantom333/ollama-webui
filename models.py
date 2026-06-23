@@ -29,6 +29,10 @@ class User(UserMixin, db.Model):
     # Empty/absent = standard user (subagents inherit the local model).
     feature_flags = db.Column(db.JSON, default=dict, nullable=False)
 
+    # Optional group membership. The group supplies baseline agent→model config
+    # (and extra feature flags); per-user feature_flags override the group's.
+    group_id = db.Column(db.Integer, db.ForeignKey('groups.id'), nullable=True, index=True)
+
     api_keys = db.relationship('ApiKey', backref='user', lazy='dynamic',
                                 cascade='all, delete-orphan')
     usage_records = db.relationship('UsageRecord', backref='user', lazy='dynamic',
@@ -53,6 +57,36 @@ class User(UserMixin, db.Model):
     def org_uuid(self):
         """Stable synthetic organization UUID (single-org deployment)."""
         return str(_uuid.uuid5(_uuid.NAMESPACE_URL, 'vivus-org'))
+
+
+class Group(db.Model):
+    """A reusable configuration profile assignable to users.
+
+    Holds a per-agent-type → model map (agent_models) plus extra feature flags
+    (e.g. a default cloud-subagent model). The CLI receives the group's config
+    merged with the user's own feature_flags (user wins) via the bootstrap
+    endpoint, and applies it on launch. Lets an admin define several
+    configurations (e.g. "fast", "cost-saver", "max-quality") and assign them.
+    """
+    __tablename__ = 'groups'
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(80), unique=True, nullable=False, index=True)
+    description = db.Column(db.String(300), nullable=True)
+    # { agentType: modelName } e.g. {"general-purpose": "minimax-m3:cloud",
+    # "Explore": "deepseek-v4-flash:cloud", "reviewer": "inherit"}
+    agent_models = db.Column(db.JSON, default=dict, nullable=False)
+    # Extra CLI feature flags applied to members (e.g.
+    # {"vivus_cloud_subagent_model": "minimax-m3:cloud"}). Merged UNDER per-user
+    # feature_flags so a user-level value wins.
+    feature_flags = db.Column(db.JSON, default=dict, nullable=False)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    members = db.relationship('User', backref='group', lazy='dynamic')
+
+    @property
+    def member_count(self):
+        return self.members.count()
 
 
 class ApiKey(db.Model):

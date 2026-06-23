@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Edit Group — {{ group.name }}{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h2 class="mb-0"><i class="fas fa-layer-group me-2"></i>Group: {{ group.name }}</h2>
+    <a href="{{ url_for('api.admin_groups') }}" class="btn btn-sm btn-outline-secondary">
+        <i class="fas fa-arrow-left me-1"></i>All groups
+    </a>
+</div>
+
+<form method="POST" action="{{ url_for('api.update_group', group_id=group.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+    <!-- Shared datalist of available models -->
+    <datalist id="model-options">
+        <option value="inherit">inherit (use the user's main model)</option>
+        {% for m in available_models %}<option value="{{ m }}"></option>{% endfor %}
+    </datalist>
+
+    <div class="card mb-3">
+        <div class="card-body">
+            <div class="row g-3">
+                <div class="col-md-5">
+                    <label class="form-label">Name</label>
+                    <input type="text" name="name" class="form-control" value="{{ group.name }}" required>
+                </div>
+                <div class="col-md-7">
+                    <label class="form-label">Description</label>
+                    <input type="text" name="description" class="form-control" value="{{ group.description or '' }}" placeholder="optional">
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-header"><i class="fas fa-robot me-2"></i>Per-agent models</div>
+        <div class="card-body">
+            <p class="text-muted small mb-3">
+                Choose the model each agent type runs on. Leave blank to use the CLI's baked task-aligned
+                default (shown as the placeholder). Enter <code>inherit</code> to run that agent on the
+                user's own main model. You can type any model the proxy serves, or pick from the list.
+            </p>
+            <div class="row g-2">
+                {% for agent_type, label, default in agent_types %}
+                <div class="col-md-6">
+                    <label class="form-label small mb-1">{{ label }}<br><code class="text-muted">{{ agent_type }}</code></label>
+                    <input type="text" list="model-options" name="agent__{{ agent_type }}" class="form-control form-control-sm"
+                           value="{{ group.agent_models.get(agent_type, '') if group.agent_models else '' }}"
+                           placeholder="default: {{ default }}">
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-header"><i class="fas fa-cloud me-2"></i>Fallback cloud subagent model <span class="text-muted small">(optional)</span></div>
+        <div class="card-body">
+            <p class="text-muted small mb-2">
+                Used for any agent type with no explicit model above (and that has no baked default).
+                Equivalent to the per-user "cloud subagents" toggle, applied to the whole group.
+            </p>
+            <select name="cloud_subagent_model" class="form-select" style="max-width:360px">
+                <option value="">— none (CLI baked defaults) —</option>
+                {% for m in cloud_subagent_models %}
+                <option value="{{ m }}"{% if group.feature_flags and group.feature_flags.get(cloud_subagent_flag) == m %} selected{% endif %}>{{ m }}</option>
+                {% endfor %}
+            </select>
+        </div>
+    </div>
+
+    <div class="d-flex justify-content-between align-items-center">
+        <span class="text-muted small">
+            <i class="fas fa-users me-1"></i>{{ group.member_count }} member{{ 's' if group.member_count != 1 else '' }}
+            — changes apply on each member's next <code>vivus</code> launch.
+        </span>
+        <button type="submit" class="btn btn-primary"><i class="fas fa-save me-1"></i>Save configuration</button>
+    </div>
+</form>
+{% endblock %}

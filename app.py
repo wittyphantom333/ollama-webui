@@ -81,6 +81,13 @@ with app.app_context():
             ))
             db.session.commit()
             app.logger.info('migrated: added users.feature_flags column')
+        # group_id FK (nullable) — links a user to a Group config profile.
+        if 'group_id' not in _user_cols:
+            db.session.execute(_sa_text(
+                "ALTER TABLE users ADD COLUMN group_id INTEGER REFERENCES groups(id)"
+            ))
+            db.session.commit()
+            app.logger.info('migrated: added users.group_id column')
     except Exception as _mig_err:  # pragma: no cover - best-effort migration
         db.session.rollback()
         app.logger.warning('schema migration check failed: %s', _mig_err)

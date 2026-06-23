@@ -15,7 +15,7 @@ from flask_login import login_required, current_user
 from models import (
     db, ApiKey, UsageRecord, SiteSettings, CloudProvider, ToolCall,
     OAuthAuthCode, OAuthToken, OAUTH_ALLOWED_CLIENT_IDS, OAUTH_GRANTED_SCOPE, Feedback,
-    EventRecord, TraceSpan, TraceLog,
+    EventRecord, TraceSpan, TraceLog, Group,
 )
 
 api_bp = Blueprint('api', __name__, template_folder='templates')
@@ -33,6 +33,75 @@ CLOUD_SUBAGENT_MODELS = [
     'deepseek-v4-pro:cloud',
     'kimi-k2.7-code:cloud',
 ]
+
+# Per-agent-type model configuration. The CLI reads this map (key in the
+# delivered feature flags) and resolves each agent's model from it, overriding
+# the baked task-aligned defaults. Keys are the CLI's agent-type identifiers.
+AGENT_MODELS_FLAG = 'vivus_agent_models'
+
+# Known agent types shown in the group editor, with the CLI's baked default
+# (for reference) and a human label. Built-ins + the proxy agents.json agents.
+KNOWN_AGENT_TYPES = [
+    ('general-purpose', 'General purpose (default fan-out agent)', 'minimax-m3:cloud'),
+    ('Explore', 'Explore — fast read-only codebase search', 'deepseek-v4-flash:cloud'),
+    ('Plan', 'Plan — planning / reasoning', 'deepseek-v4-pro:cloud'),
+    ('verification', 'Verification — careful checking', 'deepseek-v4-pro:cloud'),
+    ('vivus-guide', 'Vivus guide — docs Q&A', 'deepseek-v4-flash:cloud'),
+    ('statusline-setup', 'Statusline setup — config script', 'qwen3-coder-next:cloud'),
+    ('coder', 'Coder — code editing', 'qwen3-coder-next:cloud'),
+    ('explorer', 'Explorer — filesystem search', 'deepseek-v4-flash:cloud'),
+    ('reviewer', 'Reviewer — code review', 'kimi-k2.7-code:cloud'),
+    ('writer', 'Writer — file creation', 'qwen3-coder-next:cloud'),
+]
+
+
+def _available_model_names():
+    """Best-effort list of model names the proxy/Ollama can serve, for the
+    group-editor dropdowns. Falls back to the curated cloud list on error."""
+    import requests as _requests
+    names = []
+    try:
+        import app as _app  # OLLAMA_API_URL + ollama_headers live in app.py
+        resp = _requests.get(f'{_app.OLLAMA_API_URL}/tags',
+                             headers=_app.ollama_headers(), timeout=3)
+        if resp.ok:
+            data = resp.json() or {}
+            names = sorted({m.get('name') for m in data.get('models', []) if m.get('name')})
+    except Exception:
+        names = []
+    if not names:
+        names = list(CLOUD_SUBAGENT_MODELS)
+    return names
+
+
+def _merged_feature_flags(user):
+    """Compose the feature flags delivered to the CLI for a user.
+
+    Precedence (later wins): group.feature_flags → group.agent_models (as
+    AGENT_MODELS_FLAG) → user.feature_flags (per-user overrides, incl. a
+    per-user AGENT_MODELS_FLAG that merges on top of the group's per-agent map).
+    """
+    flags = {}
+    group = getattr(user, 'group', None) if user else None
+    if group:
+        if group.feature_flags:
+            flags.update(group.feature_flags)
+        if group.agent_models:
+            flags[AGENT_MODELS_FLAG] = dict(group.agent_models)
+
+    user_flags = dict((user.feature_flags or {})) if user else {}
+    # Merge a per-user agent map ON TOP of the group's (per-agent granularity).
+    user_agent_models = user_flags.pop(AGENT_MODELS_FLAG, None)
+    if isinstance(user_agent_models, dict):
+        merged = dict(flags.get(AGENT_MODELS_FLAG, {}))
+        merged.update(user_agent_models)
+        flags[AGENT_MODELS_FLAG] = merged
+    # Remaining user-level flags override group-level keys.
+    flags.update(user_flags)
+    # Drop an empty agent map so the CLI cleanly falls back to baked defaults.
+    if AGENT_MODELS_FLAG in flags and not flags[AGENT_MODELS_FLAG]:
+        flags.pop(AGENT_MODELS_FLAG, None)
+    return flags
 
 
 def _user_from_request():
@@ -622,7 +691,7 @@ def vivus_cli_feature_flags():
     defaults (never auto-enabling cloud usage).
     """
     user = _user_from_request()
-    flags = (user.feature_flags or {}) if user else {}
+    flags = _merged_feature_flags(user) if user else {}
     return jsonify({'feature_flags': flags})
 
 
@@ -1409,9 +1478,11 @@ def admin_users():
         return redirect(url_for('index'))
     from models import User
     users = User.query.order_by(User.created_at.desc()).all()
+    groups = Group.query.order_by(Group.name.asc()).all()
     return render_template(
         'admin_users.html',
         users=users,
+        groups=groups,
         cloud_subagent_models=CLOUD_SUBAGENT_MODELS,
         cloud_subagent_flag=CLOUD_SUBAGENT_FLAG,
     )
@@ -1501,6 +1572,144 @@ def create_user():
         db.session.commit()
         flash(f'User "{username}" created.', 'success')
     return redirect(url_for('api.admin_users'))
+
+
+@api_bp.route('/admin/users/<int:user_id>/group', methods=['POST'])
+@login_required
+def assign_user_group(user_id):
+    """Assign (or clear) a user's group. The group's agent-model config +
+    feature flags are delivered to that user's CLI on next launch."""
+    if not current_user.is_admin:
+        flash('Admin access required.', 'danger')
+        return redirect(url_for('index'))
+    from models import User
+    user = User.query.get_or_404(user_id)
+    raw = (request.form.get('group_id') or '').strip()
+    if not raw:
+        user.group_id = None
+        msg = f'Cleared group for "{user.username}".'
+    else:
+        group = Group.query.get(int(raw)) if raw.isdigit() else None
+        if not group:
+            flash('Unknown group.', 'danger')
+            return redirect(url_for('api.admin_users'))
+        user.group_id = group.id
+        msg = f'Assigned "{user.username}" to group "{group.name}".'
+    db.session.commit()
+    flash(msg, 'info')
+    return redirect(url_for('api.admin_users'))
+
+
+# ---------------------------------------------------------------------------
+# Admin — group configuration profiles
+# ---------------------------------------------------------------------------
+
+@api_bp.route('/admin/groups')
+@login_required
+def admin_groups():
+    if not current_user.is_admin:
+        flash('Admin access required.', 'danger')
+        return redirect(url_for('index'))
+    groups = Group.query.order_by(Group.name.asc()).all()
+    return render_template('admin_groups.html', groups=groups)
+
+
+@api_bp.route('/admin/groups/create', methods=['POST'])
+@login_required
+def create_group():
+    if not current_user.is_admin:
+        flash('Admin access required.', 'danger')
+        return redirect(url_for('index'))
+    name = (request.form.get('name') or '').strip()
+    description = (request.form.get('description') or '').strip() or None
+    if not name:
+        flash('Group name is required.', 'danger')
+        return redirect(url_for('api.admin_groups'))
+    if Group.query.filter_by(name=name).first():
+        flash('A group with that name already exists.', 'danger')
+        return redirect(url_for('api.admin_groups'))
+    group = Group(name=name, description=description, agent_models={}, feature_flags={})
+    db.session.add(group)
+    db.session.commit()
+    flash(f'Group "{name}" created.', 'success')
+    return redirect(url_for('api.edit_group', group_id=group.id))
+
+
+@api_bp.route('/admin/groups/<int:group_id>/edit')
+@login_required
+def edit_group(group_id):
+    if not current_user.is_admin:
+        flash('Admin access required.', 'danger')
+        return redirect(url_for('index'))
+    group = Group.query.get_or_404(group_id)
+    return render_template(
+        'admin_group_edit.html',
+        group=group,
+        agent_types=KNOWN_AGENT_TYPES,
+        available_models=_available_model_names(),
+        cloud_subagent_models=CLOUD_SUBAGENT_MODELS,
+        cloud_subagent_flag=CLOUD_SUBAGENT_FLAG,
+    )
+
+
+@api_bp.route('/admin/groups/<int:group_id>/update', methods=['POST'])
+@login_required
+def update_group(group_id):
+    if not current_user.is_admin:
+        flash('Admin access required.', 'danger')
+        return redirect(url_for('index'))
+    from sqlalchemy.orm.attributes import flag_modified
+    group = Group.query.get_or_404(group_id)
+
+    name = (request.form.get('name') or '').strip()
+    if name and name != group.name:
+        if Group.query.filter(Group.name == name, Group.id != group.id).first():
+            flash('Another group already uses that name.', 'danger')
+            return redirect(url_for('api.edit_group', group_id=group.id))
+        group.name = name
+    group.description = (request.form.get('description') or '').strip() or None
+
+    # Per-agent models: a form field `agent__<type>` for each known agent type.
+    # Empty value = unset (CLI uses its baked default). 'inherit' = parent model.
+    agent_models = {}
+    for agent_type, _label, _default in KNOWN_AGENT_TYPES:
+        val = (request.form.get(f'agent__{agent_type}') or '').strip()
+        if val:
+            agent_models[agent_type] = val
+    group.agent_models = agent_models
+    flag_modified(group, 'agent_models')
+
+    # Optional group-level cloud-subagent default (applies when an agent type
+    # has no explicit mapping and the CLI falls through to the global flag).
+    flags = dict(group.feature_flags or {})
+    cloud_model = (request.form.get('cloud_subagent_model') or '').strip()
+    if cloud_model:
+        flags[CLOUD_SUBAGENT_FLAG] = cloud_model
+    else:
+        flags.pop(CLOUD_SUBAGENT_FLAG, None)
+    group.feature_flags = flags
+    flag_modified(group, 'feature_flags')
+
+    db.session.commit()
+    flash(f'Group "{group.name}" saved.', 'success')
+    return redirect(url_for('api.edit_group', group_id=group.id))
+
+
+@api_bp.route('/admin/groups/<int:group_id>/delete', methods=['POST'])
+@login_required
+def delete_group(group_id):
+    if not current_user.is_admin:
+        flash('Admin access required.', 'danger')
+        return redirect(url_for('index'))
+    group = Group.query.get_or_404(group_id)
+    # Detach members (set group_id NULL) before delete.
+    for member in group.members.all():
+        member.group_id = None
+    name = group.name
+    db.session.delete(group)
+    db.session.commit()
+    flash(f'Group "{name}" deleted.', 'info')
+    return redirect(url_for('api.admin_groups'))
 
 
 # ---------------------------------------------------------------------------
