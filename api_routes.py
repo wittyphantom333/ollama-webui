@@ -600,6 +600,99 @@ def admin_feedback():
 
 
 # ---------------------------------------------------------------------------
+# Portal UI — CLI product events (telemetry) viewer
+# ---------------------------------------------------------------------------
+
+# Human-friendly labels for the feedback-survey rating values.
+_RATING_LABELS = {'good': 'Good', 'fine': 'Fine', 'bad': 'Bad', 'dismissed': 'Dismissed'}
+
+
+@api_bp.route('/admin/events')
+@login_required
+def admin_events():
+    """Browse CLI product events forwarded by the proxy (tengu_* telemetry),
+    with a feedback-survey rating summary. Admin sees all; regular users see
+    only their own events."""
+    import json as _json
+    from sqlalchemy import func
+    from models import User
+
+    is_admin = current_user.is_admin
+    page = request.args.get('page', 1, type=int)
+    event_filter = request.args.get('event', '')
+
+    base_q = EventRecord.query
+    if not is_admin:
+        base_q = base_q.filter(EventRecord.user_id == current_user.id)
+
+    q = base_q.order_by(EventRecord.id.desc())
+    if event_filter:
+        q = q.filter(EventRecord.event == event_filter)
+    pagination = q.paginate(page=page, per_page=50, error_out=False)
+
+    users = {u.id: u.username for u in User.query.all()}
+
+    # Event-name breakdown (respecting the per-user scope) for the overview +
+    # filter chips.
+    counts_q = db.session.query(EventRecord.event, func.count(EventRecord.id))
+    if not is_admin:
+        counts_q = counts_q.filter(EventRecord.user_id == current_user.id)
+    counts = counts_q.group_by(EventRecord.event).order_by(func.count(EventRecord.id).desc()).all()
+    total_events = sum(c for _, c in counts)
+
+    runs_q = db.session.query(func.count(func.distinct(EventRecord.run_id)))
+    if not is_admin:
+        runs_q = runs_q.filter(EventRecord.user_id == current_user.id)
+    distinct_runs = runs_q.scalar() or 0
+
+    # Feedback-survey rating tally: response lives in the metadata of the
+    # 'responded' events (event_type == 'responded').
+    ratings = {'good': 0, 'fine': 0, 'bad': 0, 'dismissed': 0}
+    survey_q = db.session.query(EventRecord.metadata_json).filter(
+        EventRecord.event == 'tengu_feedback_survey_event')
+    if not is_admin:
+        survey_q = survey_q.filter(EventRecord.user_id == current_user.id)
+    for (meta_str,) in survey_q.all():
+        try:
+            m = _json.loads(meta_str) if meta_str else {}
+        except (ValueError, TypeError):
+            continue
+        if m.get('event_type') == 'responded':
+            r = m.get('response')
+            if r in ratings:
+                ratings[r] += 1
+    survey_total = sum(ratings.values())
+
+    # Pretty-print metadata for the visible rows.
+    parsed = {}
+    for ev in pagination.items:
+        if not ev.metadata_json:
+            parsed[ev.id] = ''
+            continue
+        try:
+            parsed[ev.id] = _json.dumps(_json.loads(ev.metadata_json), indent=2, ensure_ascii=False)
+        except (ValueError, TypeError):
+            parsed[ev.id] = ev.metadata_json
+
+    return render_template(
+        'admin_events.html',
+        events=pagination.items,
+        pagination=pagination,
+        users=users,
+        counts=counts,
+        total_events=total_events,
+        distinct_runs=distinct_runs,
+        ratings=ratings,
+        rating_labels=_RATING_LABELS,
+        survey_total=survey_total,
+        event_filter=event_filter,
+        parsed=parsed,
+        is_admin=is_admin,
+    )
+
+
+
+# ---------------------------------------------------------------------------
 # Portal UI — usage analytics dashboard
 # ---------------------------------------------------------------------------
 

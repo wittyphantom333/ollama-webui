@@ -1,0 +1,175 @@
+{% extends "base.html" %}
+{% block title %}Events — Vivus Admin{% endblock %}
+{% block extra_css %}
+<style>
+  .ev-meta { color: #6b7280; }
+  [data-theme="dark"] .ev-meta { color: #9ca3af; }
+  .table-hover tbody tr.ev-detail:hover { background-color: transparent; }
+  .ev-name { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85rem; }
+  .ev-chip { cursor: pointer; }
+  .rating-good { color: #16a34a; }
+  .rating-fine { color: #2563eb; }
+  .rating-bad  { color: #dc2626; }
+  .rating-dismissed { color: #9ca3af; }
+</style>
+{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h2 class="mb-0"><i class="fas fa-wave-square me-2"></i>CLI Events</h2>
+    {% if event_filter %}
+    <a href="{{ url_for('api.admin_events') }}" class="btn btn-sm btn-outline-secondary">
+        <i class="fas fa-times me-1"></i>Clear filter: <code class="ms-1">{{ event_filter }}</code>
+    </a>
+    {% endif %}
+</div>
+
+<!-- Summary cards -->
+<div class="row g-3 mb-3">
+    <div class="col-6 col-md-3">
+        <div class="card h-100"><div class="card-body py-3">
+            <div class="text-muted small text-uppercase">Total Events</div>
+            <div class="h4 mb-0">{{ '{:,}'.format(total_events) }}</div>
+        </div></div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="card h-100"><div class="card-body py-3">
+            <div class="text-muted small text-uppercase">Sessions</div>
+            <div class="h4 mb-0">{{ '{:,}'.format(distinct_runs) }}</div>
+        </div></div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="card h-100"><div class="card-body py-3">
+            <div class="text-muted small text-uppercase">Event Types</div>
+            <div class="h4 mb-0">{{ counts|length }}</div>
+        </div></div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="card h-100"><div class="card-body py-3">
+            <div class="text-muted small text-uppercase">Survey Responses</div>
+            <div class="h4 mb-0">{{ survey_total }}</div>
+        </div></div>
+    </div>
+</div>
+
+<!-- Feedback survey rating breakdown -->
+{% if survey_total %}
+<div class="card mb-3">
+    <div class="card-body py-3">
+        <div class="text-muted small text-uppercase mb-2">
+            <i class="fas fa-star-half-alt me-1"></i>Session Ratings ("How is Vivus doing this session?")
+        </div>
+        <div class="d-flex flex-wrap gap-4">
+            {% for key in ['good', 'fine', 'bad', 'dismissed'] %}
+            <div>
+                <span class="h5 rating-{{ key }}">{{ ratings[key] }}</span>
+                <span class="text-muted ms-1">{{ rating_labels[key] }}</span>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Event-type filter chips -->
+{% if counts %}
+<div class="mb-3 d-flex flex-wrap gap-1">
+    {% for name, cnt in counts[:24] %}
+    <a href="{{ url_for('api.admin_events', event=name) }}"
+       class="badge ev-chip text-decoration-none {% if event_filter == name %}bg-primary{% else %}bg-secondary{% endif %}"
+       title="{{ cnt }} events">
+        {{ name }} <span class="opacity-75">{{ cnt }}</span>
+    </a>
+    {% endfor %}
+</div>
+{% endif %}
+
+{% if events %}
+<div class="card">
+    <div class="table-responsive">
+        <table class="table table-hover mb-0">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Time (UTC)</th>
+                    {% if is_admin %}<th>User</th>{% endif %}
+                    <th>Event</th>
+                    <th>Session</th>
+                    <th>Metadata</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for ev in events %}
+                <tr>
+                    <td class="text-muted small">{{ ev.id }}</td>
+                    <td class="text-nowrap small">{{ ev.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                    {% if is_admin %}
+                    <td>
+                        {% if ev.user_id and ev.user_id in users %}
+                            <span class="badge bg-secondary">{{ users[ev.user_id] }}</span>
+                        {% elif ev.device_id %}
+                            <span class="text-muted small" title="device id">{{ ev.device_id[:8] }}</span>
+                        {% else %}
+                            <span class="text-muted small">anonymous</span>
+                        {% endif %}
+                    </td>
+                    {% endif %}
+                    <td>
+                        <a class="ev-name text-decoration-none" href="{{ url_for('api.admin_events', event=ev.event) }}">{{ ev.event }}</a>
+                        {% if ev.event == 'tengu_feedback_survey_event' %}
+                            <i class="fas fa-star-half-alt text-warning ms-1" title="feedback survey"></i>
+                        {% endif %}
+                    </td>
+                    <td class="text-muted small" title="{{ ev.run_id }}">{{ ev.run_id[:8] if ev.run_id else '—' }}</td>
+                    <td class="small text-muted" style="max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                        {{ (parsed.get(ev.id) or '')|replace('\n', ' ')|truncate(90, true) }}
+                    </td>
+                    <td>
+                        {% if parsed.get(ev.id) %}
+                        <button class="btn btn-sm btn-outline-secondary"
+                                data-bs-toggle="collapse"
+                                data-bs-target="#meta-{{ ev.id }}"
+                                title="View metadata">
+                            <i class="fas fa-code"></i>
+                        </button>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% if parsed.get(ev.id) %}
+                <tr class="collapse ev-detail" id="meta-{{ ev.id }}">
+                    <td colspan="{% if is_admin %}7{% else %}6{% endif %}">
+                        <pre class="bg-dark text-light p-3 rounded small mb-0" style="max-height:300px;overflow:auto;white-space:pre-wrap;word-break:break-all;">{{ parsed.get(ev.id) }}</pre>
+                    </td>
+                </tr>
+                {% endif %}
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+{% if pagination.pages > 1 %}
+<nav class="mt-3">
+    <ul class="pagination pagination-sm">
+        {% for p in pagination.iter_pages(left_edge=2, right_edge=2, left_current=2, right_current=3) %}
+            {% if p %}
+                <li class="page-item{% if p == pagination.page %} active{% endif %}">
+                    <a class="page-link" href="{{ url_for('api.admin_events', page=p, event=event_filter) }}">{{ p }}</a>
+                </li>
+            {% else %}
+                <li class="page-item disabled"><span class="page-link">…</span></li>
+            {% endif %}
+        {% endfor %}
+    </ul>
+</nav>
+{% endif %}
+
+{% else %}
+<div class="card text-center text-muted py-5">
+    <i class="fas fa-wave-square fa-2x mb-3"></i>
+    <p>No events recorded yet.</p>
+    <p class="small">CLI events arrive when running <code>vivus</code> with
+       <code>VIVUS_CODE_ENABLE_EVENT_LOGGING=1</code> (default in the launcher).</p>
+</div>
+{% endif %}
+{% endblock %}
