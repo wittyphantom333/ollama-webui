@@ -2,15 +2,66 @@
 {% block title %}Events — Vivus Admin{% endblock %}
 {% block extra_css %}
 <style>
-  .ev-meta { color: #6b7280; }
-  [data-theme="dark"] .ev-meta { color: #9ca3af; }
+  /* Explicit colors so everything stays readable in BOTH themes. Bootstrap's
+     table cell color (--bs-table-color) otherwise bleeds dark text onto the
+     dark page; these override it for this view. */
+
+  .ev-name { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85rem; color: #1f2937; }
+  [data-theme="dark"] .ev-name { color: #e5e7eb; }
+
+  /* Inline metadata preview (collapsed JSON) */
+  .ev-preview {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.78rem;
+    color: #4b5563;
+    max-width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  [data-theme="dark"] .ev-preview { color: #cbd5e1; }
+
+  /* Clickable summary rows */
+  tr.ev-row { cursor: pointer; }
+  tr.ev-row:hover { background-color: rgba(0,0,0,0.04); }
+  [data-theme="dark"] tr.ev-row:hover { background-color: rgba(255,255,255,0.07); }
+  tr.ev-row td { vertical-align: middle; }
+
+  /* Chevron rotates when the row's detail is open */
+  .ev-row .ev-caret { transition: transform 0.15s ease; color: #6b7280; }
+  [data-theme="dark"] .ev-row .ev-caret { color: #9ca3af; }
+  .ev-row[aria-expanded="true"] .ev-caret { transform: rotate(90deg); }
+
+  /* Detail row — keep hover from recoloring it */
   .table-hover tbody tr.ev-detail:hover { background-color: transparent; }
-  .ev-name { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85rem; }
-  .ev-chip { cursor: pointer; }
+  .ev-json {
+    background: #0f172a; color: #e2e8f0;
+    padding: 0.75rem 1rem; border-radius: 0.375rem; margin-bottom: 0;
+    max-height: 340px; overflow: auto;
+    white-space: pre-wrap; word-break: break-word;
+    font-size: 0.8rem; line-height: 1.4;
+  }
+
+  /* Event filter chips */
+  .ev-chip { cursor: pointer; font-weight: 500; }
+  .ev-chip.bg-secondary { background-color: #e5e7eb !important; color: #374151 !important; }
+  [data-theme="dark"] .ev-chip.bg-secondary { background-color: #374151 !important; color: #e5e7eb !important; }
+  .ev-chip-count { opacity: 0.65; margin-left: 0.15rem; }
+
+  /* Ratings — brighter in dark mode for contrast */
   .rating-good { color: #16a34a; }
   .rating-fine { color: #2563eb; }
   .rating-bad  { color: #dc2626; }
-  .rating-dismissed { color: #9ca3af; }
+  .rating-dismissed { color: #6b7280; }
+  [data-theme="dark"] .rating-good { color: #4ade80; }
+  [data-theme="dark"] .rating-fine { color: #60a5fa; }
+  [data-theme="dark"] .rating-bad  { color: #f87171; }
+  [data-theme="dark"] .rating-dismissed { color: #9ca3af; }
+
+  .rating-tile { text-decoration: none; padding: 0.4rem 0.9rem; border-radius: 0.5rem; transition: background-color 0.12s ease; }
+  .rating-tile:hover { background-color: rgba(0,0,0,0.05); }
+  [data-theme="dark"] .rating-tile:hover { background-color: rgba(255,255,255,0.06); }
+
+  /* Stat cards become clickable when they link to a filter */
+  a.stat-card { text-decoration: none; color: inherit; display: block; }
+  a.stat-card .card:hover { border-color: var(--primary-color); }
 </style>
 {% endblock %}
 {% block content %}
@@ -44,10 +95,13 @@
         </div></div>
     </div>
     <div class="col-6 col-md-3">
+        <!-- Clickable: jumps to the survey-event filter -->
+        <a class="stat-card" href="{{ url_for('api.admin_events', event='tengu_feedback_survey_event') }}">
         <div class="card h-100"><div class="card-body py-3">
-            <div class="text-muted small text-uppercase">Survey Responses</div>
+            <div class="text-muted small text-uppercase">Survey Responses <i class="fas fa-arrow-right ms-1 small"></i></div>
             <div class="h4 mb-0">{{ survey_total }}</div>
         </div></div>
+        </a>
     </div>
 </div>
 
@@ -57,13 +111,15 @@
     <div class="card-body py-3">
         <div class="text-muted small text-uppercase mb-2">
             <i class="fas fa-star-half-alt me-1"></i>Session Ratings ("How is Vivus doing this session?")
+            <span class="text-muted ms-2" style="text-transform:none;">— click a tile to see those responses</span>
         </div>
-        <div class="d-flex flex-wrap gap-4">
+        <div class="d-flex flex-wrap gap-2">
             {% for key in ['good', 'fine', 'bad', 'dismissed'] %}
-            <div>
-                <span class="h5 rating-{{ key }}">{{ ratings[key] }}</span>
-                <span class="text-muted ms-1">{{ rating_labels[key] }}</span>
-            </div>
+            <a class="rating-tile d-flex align-items-baseline gap-2"
+               href="{{ url_for('api.admin_events', event='tengu_feedback_survey_event') }}">
+                <span class="h5 mb-0 rating-{{ key }}">{{ ratings[key] }}</span>
+                <span class="text-muted">{{ rating_labels[key] }}</span>
+            </a>
             {% endfor %}
         </div>
     </div>
@@ -77,7 +133,7 @@
     <a href="{{ url_for('api.admin_events', event=name) }}"
        class="badge ev-chip text-decoration-none {% if event_filter == name %}bg-primary{% else %}bg-secondary{% endif %}"
        title="{{ cnt }} events">
-        {{ name }} <span class="opacity-75">{{ cnt }}</span>
+        {{ name }} <span class="ev-chip-count">{{ cnt }}</span>
     </a>
     {% endfor %}
 </div>
@@ -86,21 +142,27 @@
 {% if events %}
 <div class="card">
     <div class="table-responsive">
-        <table class="table table-hover mb-0">
+        <table class="table table-hover mb-0 align-middle">
             <thead>
                 <tr>
+                    <th style="width:1%"></th>
                     <th>ID</th>
                     <th>Time (UTC)</th>
                     {% if is_admin %}<th>User</th>{% endif %}
                     <th>Event</th>
                     <th>Session</th>
                     <th>Metadata</th>
-                    <th></th>
                 </tr>
             </thead>
             <tbody>
                 {% for ev in events %}
-                <tr>
+                {% set has_meta = parsed.get(ev.id) %}
+                {% set resp = survey_resp.get(ev.id) %}
+                <tr class="{% if has_meta %}ev-row{% endif %}"
+                    {% if has_meta %}data-bs-toggle="collapse" data-bs-target="#meta-{{ ev.id }}" aria-expanded="false"{% endif %}>
+                    <td class="text-center">
+                        {% if has_meta %}<i class="fas fa-chevron-right ev-caret small"></i>{% endif %}
+                    </td>
                     <td class="text-muted small">{{ ev.id }}</td>
                     <td class="text-nowrap small">{{ ev.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
                     {% if is_admin %}
@@ -115,30 +177,30 @@
                     </td>
                     {% endif %}
                     <td>
-                        <a class="ev-name text-decoration-none" href="{{ url_for('api.admin_events', event=ev.event) }}">{{ ev.event }}</a>
+                        <span class="ev-name">{{ ev.event }}</span>
                         {% if ev.event == 'tengu_feedback_survey_event' %}
-                            <i class="fas fa-star-half-alt text-warning ms-1" title="feedback survey"></i>
+                            {% if resp in ['good', 'fine', 'bad', 'dismissed'] %}
+                                <span class="badge ms-1 rating-{{ resp }}" style="background:transparent;border:1px solid currentColor;">
+                                    <i class="fas fa-star me-1"></i>{{ rating_labels[resp] }}
+                                </span>
+                            {% elif resp %}
+                                <span class="badge bg-secondary ms-1">{{ resp }}</span>
+                            {% endif %}
                         {% endif %}
                     </td>
                     <td class="text-muted small" title="{{ ev.run_id }}">{{ ev.run_id[:8] if ev.run_id else '—' }}</td>
-                    <td class="small text-muted" style="max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
-                        {{ (parsed.get(ev.id) or '')|replace('\n', ' ')|truncate(90, true) }}
-                    </td>
                     <td>
-                        {% if parsed.get(ev.id) %}
-                        <button class="btn btn-sm btn-outline-secondary"
-                                data-bs-toggle="collapse"
-                                data-bs-target="#meta-{{ ev.id }}"
-                                title="View metadata">
-                            <i class="fas fa-code"></i>
-                        </button>
+                        {% if has_meta %}
+                        <span class="ev-preview d-inline-block">{{ has_meta|replace('\n', ' ')|truncate(80, true) }}</span>
+                        {% else %}
+                        <span class="text-muted small fst-italic">—</span>
                         {% endif %}
                     </td>
                 </tr>
-                {% if parsed.get(ev.id) %}
+                {% if has_meta %}
                 <tr class="collapse ev-detail" id="meta-{{ ev.id }}">
                     <td colspan="{% if is_admin %}7{% else %}6{% endif %}">
-                        <pre class="bg-dark text-light p-3 rounded small mb-0" style="max-height:300px;overflow:auto;white-space:pre-wrap;word-break:break-all;">{{ parsed.get(ev.id) }}</pre>
+                        <pre class="ev-json">{{ has_meta }}</pre>
                     </td>
                 </tr>
                 {% endif %}
@@ -167,7 +229,7 @@
 {% else %}
 <div class="card text-center text-muted py-5">
     <i class="fas fa-wave-square fa-2x mb-3"></i>
-    <p>No events recorded yet.</p>
+    <p>No events recorded{% if event_filter %} for <code>{{ event_filter }}</code>{% endif %} yet.</p>
     <p class="small">CLI events arrive when running <code>vivus</code> with
        <code>VIVUS_CODE_ENABLE_EVENT_LOGGING=1</code> (default in the launcher).</p>
 </div>

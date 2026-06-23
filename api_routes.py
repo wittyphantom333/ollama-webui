@@ -663,14 +663,22 @@ def admin_events():
                 ratings[r] += 1
     survey_total = sum(ratings.values())
 
-    # Pretty-print metadata for the visible rows.
+    # Pretty-print metadata for the visible rows. Also extract the survey
+    # rating (response) for feedback-survey rows so the table can show it inline.
     parsed = {}
+    survey_resp = {}
     for ev in pagination.items:
         if not ev.metadata_json:
             parsed[ev.id] = ''
             continue
         try:
-            parsed[ev.id] = _json.dumps(_json.loads(ev.metadata_json), indent=2, ensure_ascii=False)
+            m = _json.loads(ev.metadata_json)
+            parsed[ev.id] = _json.dumps(m, indent=2, ensure_ascii=False)
+            if ev.event == 'tengu_feedback_survey_event' and isinstance(m, dict):
+                if m.get('event_type') == 'responded' and m.get('response'):
+                    survey_resp[ev.id] = m.get('response')
+                elif m.get('event_type'):
+                    survey_resp[ev.id] = m.get('event_type')  # appeared / etc.
         except (ValueError, TypeError):
             parsed[ev.id] = ev.metadata_json
 
@@ -685,10 +693,12 @@ def admin_events():
         ratings=ratings,
         rating_labels=_RATING_LABELS,
         survey_total=survey_total,
+        survey_resp=survey_resp,
         event_filter=event_filter,
         parsed=parsed,
         is_admin=is_admin,
     )
+
 
 
 
