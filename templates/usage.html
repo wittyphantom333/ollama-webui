@@ -180,8 +180,8 @@
                         {% endif %}
                         {% if r.salvaged %}
                             <span class="chip" style="background:#9b59b6;color:#fff;" title="Tool call recovered from plain-text JSON: {{ r.salvaged_tools or '' }}">salvaged</span>
-                        {% elif r.stop_reason == 'end_turn' and r.tools_available and not r.tool_names %}
-                            <span class="chip" style="background:#e67e22;color:#fff;" title="Model ended the turn without calling a tool, despite tools being offered">no-tool</span>
+                        {% elif r.raw_text %}
+                            <span class="chip" style="background:#e67e22;color:#fff;" title="Model emitted something tool-call-shaped we could not parse, and called no tool">no-tool</span>
                         {% endif %}
                         <span class="chip model-chip">{{ r.model.replace(':latest','')[:15] }}</span>
                         {% if r.tier %}<span class="chip tier-chip">{{ r.tier }}</span>{% endif %}

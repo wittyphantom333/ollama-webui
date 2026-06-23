@@ -305,9 +305,10 @@ def ingest_metrics():
 def _bounded_payload_json(inner, limit=600000):
     """Serialize a payload to VALID JSON within `limit` chars.
 
-    Bounds size by trimming the transcript array (dropping the OLDEST messages),
-    never by slicing the JSON string — a raw slice corrupts the JSON and makes
-    the stored transcript unparseable/unreadable.
+    Bounds size by trimming the transcript array (dropping the OLDEST messages)
+    and/or truncating long string values — NEVER by slicing the JSON string,
+    which corrupts it and makes the stored payload unparseable. Always returns
+    valid JSON so the admin viewer can render it.
     """
     import json as _json
     try:
@@ -316,6 +317,7 @@ def _bounded_payload_json(inner, limit=600000):
         return _json.dumps({'_error': 'unserializable payload'})
     if len(s) <= limit:
         return s
+    # 1) Trim an oversized transcript array (keep the NEWEST messages).
     if isinstance(inner, dict) and isinstance(inner.get('transcript'), list):
         base = {k: v for k, v in inner.items() if k != 'transcript'}
         total = len(inner['transcript'])
@@ -327,9 +329,33 @@ def _bounded_payload_json(inner, limit=600000):
             if len(cs) <= limit:
                 return cs
             keep = keep[max(1, len(keep) // 4):]  # drop oldest ~25%, converge fast
-        base['_truncated'] = 'transcript omitted (too large)'
-        return _json.dumps(base, ensure_ascii=False)[:limit]
-    return s[:limit]
+        inner = base  # transcript can't fit at all — fall through to value capping
+
+    # 2) Recursively cap long string values anywhere in the structure. This
+    #    handles payloads with NO transcript array (e.g. bloated by embedded
+    #    tool schemas / system context) that the step above can't shrink.
+    def _shrink(obj, budget):
+        if isinstance(obj, str):
+            return obj if len(obj) <= budget else obj[:budget] + '…(truncated)'
+        if isinstance(obj, list):
+            return [_shrink(x, budget) for x in obj]
+        if isinstance(obj, dict):
+            return {k: _shrink(v, budget) for k, v in obj.items()}
+        return obj
+    for cap in (8000, 2000, 500, 100):
+        shrunk = _shrink(inner, cap)
+        if isinstance(shrunk, dict):
+            shrunk = {**shrunk, '_truncated': f'string values capped at {cap} chars'}
+        cs = _json.dumps(shrunk, ensure_ascii=False)
+        if len(cs) <= limit:
+            return cs
+
+    # 3) Last resort: a VALID JSON object carrying a bounded raw excerpt as a
+    #    string value (json.dumps escapes it, so the result stays parseable).
+    return _json.dumps({
+        '_truncated': 'payload too large to store structured; raw excerpt only',
+        '_raw_excerpt': s[:limit - 200],
+    }, ensure_ascii=False)
 
 
 @api_bp.route('/api/v1/feedback', methods=['POST'])
@@ -798,10 +824,11 @@ def _parse_feedback_payload(payload_str):
         # Best-effort salvage of top-level scalar meta from a truncated/invalid
         # payload (e.g. legacy rows stored before bounded serialization).
         import re as _re
-        for k in ('description', 'platform', 'version', 'datetime'):
-            mm = _re.search(r'"' + k + r'"\s*:\s*"([^"]*)"', payload_str)
-            if mm:
-                out['meta'][k] = mm.group(1)
+        for k in ('description', 'platform', 'version', 'datetime', 'message_count', 'terminal'):
+            mm = _re.search(r'"' + k + r'"\s*:\s*"?([^",}]*)', payload_str)
+            if mm and mm.group(1):
+                out['meta'][k] = mm.group(1).strip()
+        out['meta']['_truncated'] = 'payload was truncated/corrupted — showing recovered fields only'
         return out
     if not isinstance(data, dict):
         return out
