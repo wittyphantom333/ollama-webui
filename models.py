@@ -342,3 +342,37 @@ class Feedback(db.Model):
     # Source API key prefix for tracing (not the full key)
     key_prefix = db.Column(db.String(20), nullable=True)
     created_at = db.Column(db.DateTime, default=_utcnow, index=True)
+
+
+class EventRecord(db.Model):
+    """CLI product / behavioral events forwarded by the proxy.
+
+    One row per event in a batch the CLI's portal event sink uploads
+    (VIVUS_CODE_ENABLE_EVENT_LOGGING=1). Distinct from UsageRecord (per-request
+    token metrics): these are tengu_* product events — startup, tool use, exit,
+    and feedback-survey responses (event 'tengu_feedback_survey_event', whose
+    metadata carries the 1=Bad / 2=Fine / 3=Good rating).
+    """
+    __tablename__ = 'usage_events'
+
+    id = db.Column(db.Integer, primary_key=True)
+    # Resolved portal user (from forwarded API key / OAuth bearer), if any.
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True, index=True)
+    # Event name, e.g. 'tengu_init', 'tengu_tool_use_success'.
+    event = db.Column(db.String(120), nullable=False, index=True)
+    # Per-process CLI run id (groups events from one `vivus` invocation).
+    run_id = db.Column(db.String(64), nullable=True, index=True)
+    # CLI device id (getOrCreateUserID) — stable per machine, attribution
+    # fallback when no API key/token resolves to a portal user.
+    device_id = db.Column(db.String(64), nullable=True)
+    # Originating client, e.g. 'vivus-cli'.
+    client = db.Column(db.String(40), nullable=True)
+    # Event metadata serialized as JSON (NOT named `metadata` — reserved by
+    # SQLAlchemy's declarative base).
+    metadata_json = db.Column(db.Text, nullable=True)
+    # Event timestamp reported by the CLI.
+    client_ts = db.Column(db.DateTime, nullable=True)
+    # Source API key prefix for tracing (not the full key).
+    key_prefix = db.Column(db.String(20), nullable=True)
+    created_at = db.Column(db.DateTime, default=_utcnow, index=True)
+

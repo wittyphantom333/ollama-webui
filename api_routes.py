@@ -15,6 +15,7 @@ from flask_login import login_required, current_user
 from models import (
     db, ApiKey, UsageRecord, SiteSettings, CloudProvider, ToolCall,
     OAuthAuthCode, OAuthToken, OAUTH_ALLOWED_CLIENT_IDS, OAUTH_GRANTED_SCOPE, Feedback,
+    EventRecord,
 )
 
 api_bp = Blueprint('api', __name__, template_folder='templates')
@@ -317,6 +318,74 @@ def ingest_feedback():
     db.session.commit()
 
     return jsonify({'feedback_id': f'fb_{record.id}', 'ok': True}), 200
+
+
+# ---------------------------------------------------------------------------
+# Proxy-facing API — CLI product / behavioral event ingestion
+# ---------------------------------------------------------------------------
+
+@api_bp.route('/api/v1/events', methods=['POST'])
+def ingest_events():
+    """Ingest a batch of CLI product events forwarded by the proxy.
+
+    The CLI's portal event sink (VIVUS_CODE_ENABLE_EVENT_LOGGING=1) batches
+    tengu_* events and POSTs them to the proxy, which forwards here. Body:
+      { client, run_id, user_id (CLI device id), events: [ {event, timestamp, metadata} ] }
+    Auth (x-api-key or OAuth bearer, forwarded by the proxy) resolves the
+    portal user when available. Always returns 200 so the CLI never blocks.
+    """
+    import json as _json
+    data = request.get_json(silent=True) or {}
+    events = data.get('events')
+    if not isinstance(events, list) or not events:
+        return jsonify({'ok': True, 'stored': 0}), 200
+
+    user = _user_from_request()
+    user_id = user.id if user else None
+    raw_key = request.headers.get('x-api-key') or ''
+    api_key_obj = ApiKey.lookup(raw_key) if raw_key else None
+    key_prefix = api_key_obj.key_prefix if api_key_obj else None
+
+    run_id = data.get('run_id') or None
+    device_id = data.get('user_id') or None
+    client = (data.get('client') or 'vivus-cli')[:40]
+
+    stored = 0
+    for ev in events[:500]:
+        if not isinstance(ev, dict):
+            continue
+        name = ev.get('event')
+        if not name:
+            continue
+
+        ts = ev.get('timestamp')
+        client_ts = None
+        if isinstance(ts, (int, float)):
+            try:
+                client_ts = datetime.fromtimestamp(ts / 1000.0, tz=timezone.utc)
+            except (ValueError, OverflowError, OSError):
+                client_ts = None
+
+        meta = ev.get('metadata')
+        try:
+            meta_str = _json.dumps(meta, ensure_ascii=False)[:8000] if meta is not None else None
+        except (TypeError, ValueError):
+            meta_str = None
+
+        db.session.add(EventRecord(
+            user_id=user_id,
+            event=str(name)[:120],
+            run_id=(str(run_id)[:64] if run_id else None),
+            device_id=(str(device_id)[:64] if device_id else None),
+            client=client,
+            metadata_json=meta_str,
+            client_ts=client_ts,
+            key_prefix=key_prefix,
+        ))
+        stored += 1
+
+    db.session.commit()
+    return jsonify({'ok': True, 'stored': stored}), 200
 
 
 @api_bp.route('/api/v1/transcript_share', methods=['POST'])
