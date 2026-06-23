@@ -233,6 +233,11 @@ def ingest_metrics():
     tool_names = ','.join(tool_names_raw) if isinstance(tool_names_raw, list) else (tool_names_raw or None)
     tools_avail_raw = data.get('tools_available')
     tools_available = ','.join(tools_avail_raw) if isinstance(tools_avail_raw, list) else (tools_avail_raw or None)
+    salvaged_tools_raw = data.get('salvaged_tools')
+    salvaged_tools = ','.join(salvaged_tools_raw) if isinstance(salvaged_tools_raw, list) else (salvaged_tools_raw or None)
+    raw_text = data.get('raw_text')
+    if isinstance(raw_text, str) and len(raw_text) > 20000:
+        raw_text = raw_text[:20000] + '\n…(truncated)'
 
     record = UsageRecord(
         user_id=api_key.user_id,
@@ -252,6 +257,9 @@ def ingest_metrics():
         error=data.get('error'),
         messages_sent=data.get('messages_sent', 0),
         prompt_budget_dropped=data.get('prompt_budget_dropped', 0),
+        salvaged=bool(data.get('salvaged')),
+        salvaged_tools=salvaged_tools,
+        raw_text=(raw_text or None),
     )
     db.session.add(record)
     db.session.flush()  # assign record.id before linking tool calls
@@ -1371,6 +1379,9 @@ def request_detail(request_id):
         'budget_dropped': record.prompt_budget_dropped,
         'tool_round': record.tool_round,
         'stop_reason': record.stop_reason,
+        'salvaged': bool(record.salvaged),
+        'salvaged_tools': (record.salvaged_tools or '').split(',') if record.salvaged_tools else [],
+        'raw_text': record.raw_text or '',
         'tools_used': (record.tool_names or '').split(',') if record.tool_names else [],
         'tools_available': (record.tools_available or '').split(',') if record.tools_available else [],
         'query': record.query_summary or '',

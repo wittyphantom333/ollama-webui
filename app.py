@@ -88,6 +88,27 @@ with app.app_context():
             ))
             db.session.commit()
             app.logger.info('migrated: added users.group_id column')
+        # Text tool-call salvage diagnostics on usage_records (salvaged flag,
+        # recovered tool names, and a capped raw-text copy for failure analysis).
+        _ur_cols = {c['name'] for c in _sa_inspect(db.engine).get_columns('usage_records')}
+        if 'salvaged' not in _ur_cols:
+            db.session.execute(_sa_text(
+                "ALTER TABLE usage_records ADD COLUMN salvaged BOOLEAN DEFAULT 0"
+            ))
+            db.session.commit()
+            app.logger.info('migrated: added usage_records.salvaged column')
+        if 'salvaged_tools' not in _ur_cols:
+            db.session.execute(_sa_text(
+                "ALTER TABLE usage_records ADD COLUMN salvaged_tools VARCHAR(500)"
+            ))
+            db.session.commit()
+            app.logger.info('migrated: added usage_records.salvaged_tools column')
+        if 'raw_text' not in _ur_cols:
+            db.session.execute(_sa_text(
+                "ALTER TABLE usage_records ADD COLUMN raw_text TEXT"
+            ))
+            db.session.commit()
+            app.logger.info('migrated: added usage_records.raw_text column')
     except Exception as _mig_err:  # pragma: no cover - best-effort migration
         db.session.rollback()
         app.logger.warning('schema migration check failed: %s', _mig_err)

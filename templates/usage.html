@@ -178,6 +178,11 @@
                         {% else %}
                             <span class="chip ok-chip">ok</span>
                         {% endif %}
+                        {% if r.salvaged %}
+                            <span class="chip" style="background:#9b59b6;color:#fff;" title="Tool call recovered from plain-text JSON: {{ r.salvaged_tools or '' }}">salvaged</span>
+                        {% elif r.stop_reason == 'end_turn' and r.tools_available and not r.tool_names %}
+                            <span class="chip" style="background:#e67e22;color:#fff;" title="Model ended the turn without calling a tool, despite tools being offered">no-tool</span>
+                        {% endif %}
                         <span class="chip model-chip">{{ r.model.replace(':latest','')[:15] }}</span>
                         {% if r.tier %}<span class="chip tier-chip">{{ r.tier }}</span>{% endif %}
                         {% if r.tool_names %}
@@ -378,6 +383,7 @@ function showDetail(requestId) {
                     <span class="badge bg-secondary">${data.tier}</span>
                     ${statusBadge}
                     ${data.stop_reason ? `<span class="badge bg-info">${data.stop_reason}</span>` : ''}
+                    ${data.salvaged ? `<span class="badge" style="background:#9b59b6;" title="Recovered: ${(data.salvaged_tools||[]).join(', ')}"><i class="fas fa-wrench me-1"></i>salvaged</span>` : ''}
                     <span style="margin-left:auto;opacity:0.7;font-size:0.8rem;">
                         <i class="fas fa-user me-1"></i>${data.user}
                         &nbsp;·&nbsp;
@@ -402,6 +408,17 @@ function showDetail(requestId) {
                     <div style="font-size:0.65rem;text-transform:uppercase;letter-spacing:0.05em;opacity:0.55;margin-bottom:5px;">Query / Summary</div>
                     <pre style="margin:0;padding:10px 12px;background:var(--card-bg,rgba(127,127,127,0.06));border:1px solid var(--border-color,#dee2e6);border-radius:5px;max-height:180px;overflow:auto;white-space:pre-wrap;word-break:break-word;font-size:0.78rem;line-height:1.4;">${data.query || '(none)'}</pre>
                 </div>
+
+                ${data.raw_text ? `
+                <div style="margin-bottom:14px;">
+                    <div style="font-size:0.65rem;text-transform:uppercase;letter-spacing:0.05em;opacity:0.55;margin-bottom:5px;">
+                        <i class="fas fa-wrench me-1" style="color:#9b59b6;"></i>Raw model output
+                        <span style="opacity:0.6;text-transform:none;letter-spacing:0;">
+                            ${data.salvaged ? '— a tool call was recovered from this text' : '— model ended the turn without calling a tool despite tools being offered'}
+                        </span>
+                    </div>
+                    <pre style="margin:0;padding:10px 12px;background:rgba(155,89,182,0.07);border:1px solid rgba(155,89,182,0.35);border-radius:5px;max-height:280px;overflow:auto;white-space:pre-wrap;word-break:break-word;font-size:0.78rem;line-height:1.4;">${escapeHtml(data.raw_text)}</pre>
+                </div>` : ''}
 
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
                     <div>

@@ -190,6 +190,12 @@ class UsageRecord(db.Model):
     messages_sent = db.Column(db.Integer, default=0)             # messages sent to Ollama
     prompt_budget_dropped = db.Column(db.Integer, default=0)     # messages dropped by budget trim
 
+    # Text tool-call salvage (proxy recovered a tool call the model emitted as
+    # plain-text JSON instead of via the structured tool_calls channel).
+    salvaged = db.Column(db.Boolean, default=False)             # a text tool call was recovered
+    salvaged_tools = db.Column(db.String(500), nullable=True)    # comma-separated recovered tool names
+    raw_text = db.Column(db.Text, nullable=True)                 # capped raw model text (salvage / no-tool-despite-tools)
+
     tool_calls = db.relationship('ToolCall', backref='usage_record', lazy='dynamic',
                                  cascade='all, delete-orphan')
 
