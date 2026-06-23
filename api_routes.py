@@ -15,7 +15,7 @@ from flask_login import login_required, current_user
 from models import (
     db, ApiKey, UsageRecord, SiteSettings, CloudProvider, ToolCall,
     OAuthAuthCode, OAuthToken, OAUTH_ALLOWED_CLIENT_IDS, OAUTH_GRANTED_SCOPE, Feedback,
-    EventRecord,
+    EventRecord, TraceSpan, TraceLog,
 )
 
 api_bp = Blueprint('api', __name__, template_folder='templates')
@@ -388,6 +388,175 @@ def ingest_events():
     return jsonify({'ok': True, 'stored': stored}), 200
 
 
+# ---------------------------------------------------------------------------
+# Proxy-facing API — OpenTelemetry (OTLP/JSON) ingestion
+# ---------------------------------------------------------------------------
+
+_OTLP_ATTR_CAP = 16000  # per-attribute-value char cap (defense in depth)
+
+
+def _safe_int(v):
+    """Parse an OTLP numeric field (often a string-encoded int64) to int|None."""
+    if v is None:
+        return None
+    try:
+        return int(v)
+    except (ValueError, TypeError):
+        return None
+
+
+def _otlp_value(v):
+    """Decode a single OTLP AnyValue object into a Python scalar/list/dict."""
+    if not isinstance(v, dict):
+        return v
+    if 'stringValue' in v:
+        return v['stringValue']
+    if 'intValue' in v:
+        try:
+            return int(v['intValue'])
+        except (ValueError, TypeError):
+            return v['intValue']
+    if 'doubleValue' in v:
+        return v['doubleValue']
+    if 'boolValue' in v:
+        return bool(v['boolValue'])
+    if 'arrayValue' in v:
+        vals = (v['arrayValue'] or {}).get('values', []) or []
+        return [_otlp_value(x) for x in vals]
+    if 'kvlistValue' in v:
+        return _otlp_attrs_to_dict((v['kvlistValue'] or {}).get('values', []))
+    return None
+
+
+def _otlp_attrs_to_dict(attr_list):
+    """Convert an OTLP attribute list [{key, value}] into a flat dict."""
+    out = {}
+    if not isinstance(attr_list, list):
+        return out
+    for kv in attr_list:
+        if not isinstance(kv, dict):
+            continue
+        k = kv.get('key')
+        if not k:
+            continue
+        val = _otlp_value(kv.get('value'))
+        if isinstance(val, str) and len(val) > _OTLP_ATTR_CAP:
+            val = val[:_OTLP_ATTR_CAP] + f'…(+{len(val) - _OTLP_ATTR_CAP} chars)'
+        out[k] = val
+    return out
+
+
+def _otlp_session_id(attrs):
+    """Best-effort session/run id from common attribute keys."""
+    for k in ('session.id', 'session_id', 'sessionId', 'run_id', 'conversation.id'):
+        v = attrs.get(k)
+        if v:
+            return str(v)[:64]
+    return None
+
+
+@api_bp.route('/api/v1/otlp/traces', methods=['POST'])
+def ingest_otlp_traces():
+    """Ingest an OTLP/JSON trace export forwarded by the proxy (/v1/traces)."""
+    import json as _json
+    data = request.get_json(silent=True) or {}
+    user = _user_from_request()
+    user_id = user.id if user else None
+    raw_key = request.headers.get('x-api-key') or ''
+    api_key_obj = ApiKey.lookup(raw_key) if raw_key else None
+    key_prefix = api_key_obj.key_prefix if api_key_obj else None
+
+    stored = 0
+    for rs in (data.get('resourceSpans') or [])[:200]:
+        res_attrs = _otlp_attrs_to_dict((rs.get('resource') or {}).get('attributes', []))
+        for ss in (rs.get('scopeSpans') or [])[:200]:
+            for sp in (ss.get('spans') or [])[:1000]:
+                attrs = _otlp_attrs_to_dict(sp.get('attributes', []))
+                merged_for_session = {**res_attrs, **attrs}
+                start_ns = _safe_int(sp.get('startTimeUnixNano'))
+                end_ns = _safe_int(sp.get('endTimeUnixNano'))
+                dur_ms = None
+                if start_ns and end_ns and end_ns >= start_ns:
+                    dur_ms = int((end_ns - start_ns) / 1_000_000)
+                status = sp.get('status') or {}
+                try:
+                    attrs_str = _json.dumps(attrs, ensure_ascii=False)[:120000]
+                except (TypeError, ValueError):
+                    attrs_str = None
+                db.session.add(TraceSpan(
+                    trace_id=str(sp.get('traceId') or '')[:40],
+                    span_id=str(sp.get('spanId') or '')[:24],
+                    parent_span_id=(str(sp.get('parentSpanId'))[:24] if sp.get('parentSpanId') else None),
+                    name=str(sp.get('name') or '')[:120],
+                    span_type=(str(attrs.get('span.type'))[:40] if attrs.get('span.type') else None),
+                    start_ns=start_ns,
+                    end_ns=end_ns,
+                    duration_ms=dur_ms,
+                    status_code=_safe_int(status.get('code')),
+                    user_id=user_id,
+                    session_id=_otlp_session_id(merged_for_session),
+                    attributes_json=attrs_str,
+                    key_prefix=key_prefix,
+                ))
+                stored += 1
+
+    db.session.commit()
+    return jsonify({'ok': True, 'stored': stored}), 200
+
+
+@api_bp.route('/api/v1/otlp/logs', methods=['POST'])
+def ingest_otlp_logs():
+    """Ingest an OTLP/JSON log export forwarded by the proxy (/v1/logs)."""
+    import json as _json
+    data = request.get_json(silent=True) or {}
+    user = _user_from_request()
+    user_id = user.id if user else None
+    raw_key = request.headers.get('x-api-key') or ''
+    api_key_obj = ApiKey.lookup(raw_key) if raw_key else None
+    key_prefix = api_key_obj.key_prefix if api_key_obj else None
+
+    stored = 0
+    for rl in (data.get('resourceLogs') or [])[:200]:
+        res_attrs = _otlp_attrs_to_dict((rl.get('resource') or {}).get('attributes', []))
+        for sl in (rl.get('scopeLogs') or [])[:200]:
+            for lr in (sl.get('logRecords') or [])[:1000]:
+                attrs = _otlp_attrs_to_dict(lr.get('attributes', []))
+                body = _otlp_value(lr.get('body'))
+                if not isinstance(body, str):
+                    try:
+                        body = _json.dumps(body, ensure_ascii=False)
+                    except (TypeError, ValueError):
+                        body = str(body)
+                if body and len(body) > 120000:
+                    body = body[:120000]
+                try:
+                    attrs_str = _json.dumps(attrs, ensure_ascii=False)[:120000]
+                except (TypeError, ValueError):
+                    attrs_str = None
+                db.session.add(TraceLog(
+                    trace_id=(str(lr.get('traceId'))[:40] if lr.get('traceId') else None),
+                    span_id=(str(lr.get('spanId'))[:24] if lr.get('spanId') else None),
+                    severity=(str(lr.get('severityText'))[:20] if lr.get('severityText') else None),
+                    body=body,
+                    attributes_json=attrs_str,
+                    time_ns=_safe_int(lr.get('timeUnixNano')),
+                    user_id=user_id,
+                    session_id=_otlp_session_id({**res_attrs, **attrs}),
+                    key_prefix=key_prefix,
+                ))
+                stored += 1
+
+    db.session.commit()
+    return jsonify({'ok': True, 'stored': stored}), 200
+
+
+@api_bp.route('/api/v1/otlp/metrics', methods=['POST'])
+def ingest_otlp_metrics():
+    """Accept (and currently drop) OTLP metric exports so the exporter gets a
+    clean 200. Usage metrics are already captured via /api/v1/metrics."""
+    return jsonify({'ok': True}), 200
+
+
 @api_bp.route('/api/v1/transcript_share', methods=['POST'])
 def ingest_transcript_share():
     """Called by the proxy when a user shares their session transcript from the
@@ -696,6 +865,260 @@ def admin_events():
         survey_resp=survey_resp,
         event_filter=event_filter,
         parsed=parsed,
+        is_admin=is_admin,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Portal UI — aggregate insights from CLI events
+# ---------------------------------------------------------------------------
+
+@api_bp.route('/admin/insights')
+@login_required
+def admin_insights():
+    """Aggregate insights computed from the tengu_* event stream: activity over
+    time, top slash commands, top skills, errors, models, and session stats
+    (cost/duration/lines from tengu_exit). Admin = all users; user = own."""
+    import json as _json
+    from collections import Counter, defaultdict
+    from datetime import timedelta
+    from sqlalchemy import func
+
+    is_admin = current_user.is_admin
+
+    def _scope(q):
+        return q if is_admin else q.filter(EventRecord.user_id == current_user.id)
+
+    total_events = _scope(db.session.query(func.count(EventRecord.id))).scalar() or 0
+    distinct_runs = _scope(db.session.query(func.count(func.distinct(EventRecord.run_id)))).scalar() or 0
+
+    # Activity over the last 14 days (UTC date buckets).
+    since = datetime.now(timezone.utc) - timedelta(days=14)
+    day_counts = Counter()
+    rows = _scope(db.session.query(EventRecord.created_at)).filter(EventRecord.created_at >= since).all()
+    for (ts,) in rows:
+        if ts:
+            day_counts[ts.strftime('%Y-%m-%d')] += 1
+    activity = []
+    for i in range(13, -1, -1):
+        d = (datetime.now(timezone.utc) - timedelta(days=i)).strftime('%Y-%m-%d')
+        activity.append({'date': d[5:], 'count': day_counts.get(d, 0)})
+    activity_max = max((a['count'] for a in activity), default=0)
+
+    # Pull metadata for the breakdown events (cap the scan for safety).
+    def _meta_rows(event_name, limit=20000):
+        q = _scope(db.session.query(EventRecord.metadata_json)).filter(
+            EventRecord.event == event_name
+        ).order_by(EventRecord.id.desc()).limit(limit)
+        out = []
+        for (m,) in q.all():
+            if not m:
+                continue
+            try:
+                out.append(_json.loads(m))
+            except (ValueError, TypeError):
+                continue
+        return out
+
+    # Top slash commands (tengu_input_command.input).
+    cmd_counter = Counter()
+    for m in _meta_rows('tengu_input_command'):
+        c = m.get('input')
+        if c:
+            cmd_counter[str(c)[:40]] += 1
+    top_commands = cmd_counter.most_common(12)
+
+    # Top skills (tengu_skill_loaded._PROTO_skill_name / skill_name).
+    skill_counter = Counter()
+    for m in _meta_rows('tengu_skill_loaded'):
+        s = m.get('_PROTO_skill_name') or m.get('skill_name')
+        if s:
+            skill_counter[str(s)[:60]] += 1
+    top_skills = skill_counter.most_common(12)
+
+    # Models (tengu_api_query.model).
+    model_counter = Counter()
+    for m in _meta_rows('tengu_api_query'):
+        mod = m.get('model')
+        if mod:
+            model_counter[str(mod)[:50]] += 1
+    top_models = model_counter.most_common(10)
+
+    # Errors: unhandled rejections by type + total error/failure-ish events.
+    err_counter = Counter()
+    for m in _meta_rows('tengu_unhandled_rejection'):
+        err_counter[str(m.get('error_name') or 'unknown')[:50]] += 1
+    top_errors = err_counter.most_common(10)
+    error_event_total = _scope(db.session.query(func.count(EventRecord.id))).filter(
+        (EventRecord.event.like('%_error%')) | (EventRecord.event.like('%rejection%')) |
+        (EventRecord.event.like('%_failed%'))
+    ).scalar() or 0
+
+    # Session stats from tengu_exit summaries.
+    sess = {'count': 0, 'cost': 0.0, 'api_ms': 0, 'wall_ms': 0, 'added': 0, 'removed': 0, 'in_tok': 0, 'out_tok': 0}
+    for m in _meta_rows('tengu_exit'):
+        sess['count'] += 1
+        sess['cost'] += float(m.get('last_session_cost') or 0)
+        sess['api_ms'] += int(m.get('last_session_api_duration') or 0)
+        sess['wall_ms'] += int(m.get('last_session_duration') or 0)
+        sess['added'] += int(m.get('last_session_lines_added') or 0)
+        sess['removed'] += int(m.get('last_session_lines_removed') or 0)
+        sess['in_tok'] += int(m.get('last_session_total_input_tokens') or m.get('last_session_input_tokens') or 0)
+        sess['out_tok'] += int(m.get('last_session_total_output_tokens') or m.get('last_session_output_tokens') or 0)
+
+    # Survey ratings tally.
+    ratings = {'good': 0, 'fine': 0, 'bad': 0, 'dismissed': 0}
+    for m in _meta_rows('tengu_feedback_survey_event'):
+        if m.get('event_type') == 'responded' and m.get('response') in ratings:
+            ratings[m['response']] += 1
+
+    return render_template(
+        'admin_insights.html',
+        total_events=total_events,
+        distinct_runs=distinct_runs,
+        activity=activity,
+        activity_max=activity_max,
+        top_commands=top_commands,
+        top_skills=top_skills,
+        top_models=top_models,
+        top_errors=top_errors,
+        error_event_total=error_event_total,
+        sess=sess,
+        ratings=ratings,
+        rating_labels=_RATING_LABELS,
+        is_admin=is_admin,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Portal UI — OpenTelemetry trace viewer
+# ---------------------------------------------------------------------------
+
+def _span_attr_preview(attrs):
+    """A compact one-line hint for a span row (tool name, model, etc.)."""
+    for k in ('tool.name', 'tool_name', 'model', 'hook.name', 'error', 'error.message'):
+        v = attrs.get(k)
+        if v:
+            return f'{k}={v}'
+    return ''
+
+
+@api_bp.route('/admin/traces')
+@login_required
+def admin_traces():
+    """Browse OpenTelemetry traces (span trees) from the CLI deep-tracing
+    exporter. Admin = all users; user = own."""
+    import json as _json
+    from sqlalchemy import func
+
+    is_admin = current_user.is_admin
+    from models import User
+    users = {u.id: u.username for u in User.query.all()}
+
+    page = request.args.get('page', 1, type=int)
+    per_page = 20
+
+    def _scope(q):
+        return q if is_admin else q.filter(TraceSpan.user_id == current_user.id)
+
+    # Distinct traces ordered by recency (max row id per trace_id).
+    tq = _scope(db.session.query(
+        TraceSpan.trace_id, func.max(TraceSpan.id).label('mx')
+    )).group_by(TraceSpan.trace_id).order_by(func.max(TraceSpan.id).desc())
+    total_traces = tq.count()
+    trace_rows = tq.limit(per_page).offset((page - 1) * per_page).all()
+    trace_ids = [r[0] for r in trace_rows]
+
+    total_spans = _scope(db.session.query(func.count(TraceSpan.id))).scalar() or 0
+
+    traces = []
+    if trace_ids:
+        all_spans = _scope(TraceSpan.query.filter(TraceSpan.trace_id.in_(trace_ids))).all()
+        by_trace = {}
+        for s in all_spans:
+            by_trace.setdefault(s.trace_id, []).append(s)
+
+        for tid in trace_ids:
+            spans = by_trace.get(tid, [])
+            by_id = {s.span_id: s for s in spans}
+            children = {}
+            roots = []
+            for s in spans:
+                if s.parent_span_id and s.parent_span_id in by_id:
+                    children.setdefault(s.parent_span_id, []).append(s)
+                else:
+                    roots.append(s)
+            roots.sort(key=lambda s: (s.start_ns or 0))
+
+            ordered = []  # (span, depth)
+
+            def _walk(node, depth):
+                ordered.append((node, depth))
+                kids = sorted(children.get(node.span_id, []), key=lambda s: (s.start_ns or 0))
+                for k in kids:
+                    _walk(k, depth + 1)
+
+            for r in roots:
+                _walk(r, 0)
+
+            root = roots[0] if roots else (spans[0] if spans else None)
+            root_attrs = {}
+            if root and root.attributes_json:
+                try:
+                    root_attrs = _json.loads(root.attributes_json)
+                except (ValueError, TypeError):
+                    root_attrs = {}
+            error_count = sum(1 for s in spans if s.status_code == 2)
+
+            span_vms = []
+            for s, depth in ordered:
+                try:
+                    attrs = _json.loads(s.attributes_json) if s.attributes_json else {}
+                except (ValueError, TypeError):
+                    attrs = {}
+                span_vms.append({
+                    'depth': depth,
+                    'name': s.name,
+                    'span_type': s.span_type,
+                    'duration_ms': s.duration_ms,
+                    'status_code': s.status_code,
+                    'span_id': s.span_id,
+                    'preview': _span_attr_preview(attrs),
+                    'attrs_pretty': _json.dumps(attrs, indent=2, ensure_ascii=False) if attrs else '',
+                })
+
+            traces.append({
+                'trace_id': tid,
+                'root_name': root.name if root else '(unknown)',
+                'root_duration_ms': root.duration_ms if root else None,
+                'start_dt': (datetime.fromtimestamp(root.start_ns / 1e9, tz=timezone.utc)
+                             if root and root.start_ns else (root.created_at if root else None)),
+                'user': users.get(root.user_id) if root else None,
+                'prompt': str(root_attrs.get('user_prompt') or '')[:160],
+                'span_count': len(spans),
+                'error_count': error_count,
+                'spans': span_vms,
+            })
+
+    # Pagination shim (lightweight; mirrors what the template expects).
+    class _Pg:
+        def __init__(self, page, per_page, total):
+            self.page = page
+            self.per_page = per_page
+            self.total = total
+            self.pages = max(1, (total + per_page - 1) // per_page)
+
+        def iter_pages(self, **kw):
+            return range(1, self.pages + 1)
+
+    pagination = _Pg(page, per_page, total_traces)
+
+    return render_template(
+        'admin_traces.html',
+        traces=traces,
+        pagination=pagination,
+        total_traces=total_traces,
+        total_spans=total_spans,
         is_admin=is_admin,
     )
 

@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block title %}Traces — Vivus Admin{% endblock %}
+{% block extra_css %}
+<style>
+  .trace-card { cursor: pointer; }
+  .trace-head { display: flex; align-items: center; gap: 12px; }
+  .trace-name { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 600;
+                color: #1f2937; }
+  [data-theme="dark"] .trace-name { color: #e5e7eb; }
+  .trace-prompt { color: #6b7280; font-size: 0.85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  [data-theme="dark"] .trace-prompt { color: #9ca3af; }
+  .trace-caret { transition: transform 0.15s ease; color: #9ca3af; }
+  .trace-card[aria-expanded="true"] .trace-caret { transform: rotate(90deg); }
+
+  /* Span tree rows */
+  .span-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; border-top: 1px solid rgba(0,0,0,0.05); }
+  [data-theme="dark"] .span-row { border-top-color: rgba(255,255,255,0.06); }
+  .span-name { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8rem; color: #1f2937; }
+  [data-theme="dark"] .span-name { color: #e5e7eb; }
+  .span-preview { color: #6b7280; font-size: 0.76rem; font-family: ui-monospace, monospace;
+                  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  [data-theme="dark"] .span-preview { color: #9ca3af; }
+  .span-dur { font-size: 0.74rem; color: #6b7280; min-width: 4rem; text-align: right; }
+  [data-theme="dark"] .span-dur { color: #cbd5e1; }
+  .span-json { background: #0f172a; color: #e2e8f0; padding: 0.6rem 0.85rem; border-radius: 0.35rem;
+               max-height: 320px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+               font-size: 0.76rem; line-height: 1.4; margin: 4px 0 6px; }
+
+  .type-badge { font-size: 0.66rem; padding: 1px 6px; border-radius: 999px; border: 1px solid currentColor; }
+  .t-interaction { color: #2563eb; } .t-llm_request { color: #7c3aed; }
+  .t-tool { color: #b45309; } .t-hook { color: #0891b2; }
+  [data-theme="dark"] .t-interaction { color: #60a5fa; } [data-theme="dark"] .t-llm_request { color: #a78bfa; }
+  [data-theme="dark"] .t-tool { color: #fbbf24; } [data-theme="dark"] .t-hook { color: #22d3ee; }
+</style>
+{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h2 class="mb-0"><i class="fas fa-diagram-project me-2"></i>Traces</h2>
+    <div class="text-muted small">{{ '{:,}'.format(total_traces) }} traces · {{ '{:,}'.format(total_spans) }} spans</div>
+</div>
+
+{% if traces %}
+{% for t in traces %}
+<div class="card mb-2">
+    <div class="card-body py-2 trace-card" data-bs-toggle="collapse" data-bs-target="#trace-{{ loop.index }}" aria-expanded="false">
+        <div class="trace-head">
+            <i class="fas fa-chevron-right trace-caret"></i>
+            <span class="trace-name">{{ t.root_name }}</span>
+            {% if t.root_duration_ms is not none %}
+            <span class="badge bg-secondary">{{ '%.2f'|format(t.root_duration_ms / 1000) }}s</span>
+            {% endif %}
+            <span class="badge bg-light text-dark border">{{ t.span_count }} span{{ 's' if t.span_count != 1 else '' }}</span>
+            {% if t.error_count %}<span class="badge bg-danger">{{ t.error_count }} error{{ 's' if t.error_count != 1 else '' }}</span>{% endif %}
+            {% if t.prompt %}<span class="trace-prompt flex-grow-1">“{{ t.prompt }}”</span>{% endif %}
+            <span class="text-muted small ms-auto text-nowrap">
+                {% if is_admin and t.user %}<span class="badge bg-secondary me-2">{{ t.user }}</span>{% endif %}
+                {% if t.start_dt %}{{ t.start_dt.strftime('%m-%d %H:%M:%S') }}{% endif %}
+            </span>
+        </div>
+    </div>
+    <div class="collapse" id="trace-{{ loop.index }}">
+        <div class="card-body pt-0">
+            <div class="text-muted small mb-2" style="font-family:ui-monospace,monospace;">trace {{ t.trace_id }}</div>
+            {% for s in t.spans %}
+            <div class="span-row" style="padding-left: {{ s.depth * 22 }}px;">
+                {% set tcls = 't-' ~ (s.span_type or '') %}
+                <span class="type-badge {{ tcls }}">{{ s.span_type or 'span' }}</span>
+                <span class="span-name">{{ s.name }}</span>
+                {% if s.status_code == 2 %}<i class="fas fa-circle-exclamation text-danger" title="error"></i>{% endif %}
+                {% if s.preview %}<span class="span-preview flex-grow-1">{{ s.preview }}</span>{% else %}<span class="flex-grow-1"></span>{% endif %}
+                <span class="span-dur">{{ s.duration_ms if s.duration_ms is not none else '—' }}{{ 'ms' if s.duration_ms is not none else '' }}</span>
+                {% if s.attrs_pretty %}
+                <button class="btn btn-sm btn-link p-0" data-bs-toggle="collapse" data-bs-target="#span-{{ loop.index }}-{{ t.trace_id[:8] }}" title="attributes">
+                    <i class="fas fa-code"></i>
+                </button>
+                {% endif %}
+            </div>
+            {% if s.attrs_pretty %}
+            <div class="collapse" id="span-{{ loop.index }}-{{ t.trace_id[:8] }}" style="padding-left: {{ s.depth * 22 }}px;">
+                <pre class="span-json">{{ s.attrs_pretty }}</pre>
+            </div>
+            {% endif %}
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endfor %}
+
+{% if pagination.pages > 1 %}
+<nav class="mt-3">
+    <ul class="pagination pagination-sm">
+        {% for p in pagination.iter_pages() %}
+        <li class="page-item{% if p == pagination.page %} active{% endif %}">
+            <a class="page-link" href="{{ url_for('api.admin_traces', page=p) }}">{{ p }}</a>
+        </li>
+        {% endfor %}
+    </ul>
+</nav>
+{% endif %}
+
+{% else %}
+<div class="card text-center text-muted py-5">
+    <i class="fas fa-diagram-project fa-2x mb-3"></i>
+    <p>No traces recorded yet.</p>
+    <p class="small">Traces arrive when running <code>vivus</code> with tracing enabled
+       (<code>VIVUS_CODE_ENABLE_TRACING</code>, default on in the launcher).
+       Each interaction produces a span tree (interaction → llm_request → tool).</p>
+</div>
+{% endif %}
+{% endblock %}

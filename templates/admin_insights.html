@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{% block title %}Insights — Vivus Admin{% endblock %}
+{% block extra_css %}
+<style>
+  .ins-card .label { color: #6b7280; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.03em; }
+  [data-theme="dark"] .ins-card .label { color: #9ca3af; }
+  .ins-card .value { font-size: 1.5rem; font-weight: 600; }
+
+  /* Activity bars */
+  .bars { display: flex; align-items: flex-end; gap: 4px; height: 90px; }
+  .bar-col { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; }
+  .bar { width: 100%; background: #2563eb; border-radius: 3px 3px 0 0; min-height: 2px; transition: height 0.2s; }
+  [data-theme="dark"] .bar { background: #60a5fa; }
+  .bar-col .day { font-size: 0.6rem; color: #9ca3af; margin-top: 3px; white-space: nowrap; }
+  .bar-col .n { font-size: 0.6rem; color: #6b7280; }
+  [data-theme="dark"] .bar-col .n { color: #cbd5e1; }
+
+  /* Ranked lists */
+  .rank-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+  .rank-name { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.82rem;
+               color: #1f2937; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  [data-theme="dark"] .rank-name { color: #e5e7eb; }
+  .rank-bar-wrap { flex: 1; background: rgba(0,0,0,0.06); border-radius: 4px; height: 8px; overflow: hidden; }
+  [data-theme="dark"] .rank-bar-wrap { background: rgba(255,255,255,0.08); }
+  .rank-bar { height: 100%; background: #6366f1; border-radius: 4px; }
+  [data-theme="dark"] .rank-bar { background: #818cf8; }
+  .rank-count { font-size: 0.78rem; color: #6b7280; min-width: 2.5rem; text-align: right; }
+  [data-theme="dark"] .rank-count { color: #9ca3af; }
+
+  .rating-good { color: #16a34a; } .rating-fine { color: #2563eb; }
+  .rating-bad { color: #dc2626; } .rating-dismissed { color: #6b7280; }
+  [data-theme="dark"] .rating-good { color: #4ade80; } [data-theme="dark"] .rating-fine { color: #60a5fa; }
+  [data-theme="dark"] .rating-bad { color: #f87171; } [data-theme="dark"] .rating-dismissed { color: #9ca3af; }
+</style>
+{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h2 class="mb-0"><i class="fas fa-chart-line me-2"></i>Insights</h2>
+    <a href="{{ url_for('api.admin_events') }}" class="btn btn-sm btn-outline-secondary">
+        <i class="fas fa-wave-square me-1"></i>Raw events
+    </a>
+</div>
+
+{% macro ranklist(rows, color_total) %}
+    {% set top = rows[0][1] if rows else 1 %}
+    {% for name, cnt in rows %}
+    <div class="rank-row">
+        <div class="rank-name" style="max-width:42%;" title="{{ name }}">{{ name }}</div>
+        <div class="rank-bar-wrap"><div class="rank-bar" style="width: {{ (cnt / top * 100)|round(0, 'floor') }}%;"></div></div>
+        <div class="rank-count">{{ cnt }}</div>
+    </div>
+    {% endfor %}
+    {% if not rows %}<div class="text-muted small fst-italic">No data yet.</div>{% endif %}
+{% endmacro %}
+
+<!-- Top summary -->
+<div class="row g-3 mb-3">
+    <div class="col-6 col-md-3"><div class="card ins-card h-100"><div class="card-body py-3">
+        <div class="label">Total Events</div><div class="value">{{ '{:,}'.format(total_events) }}</div>
+    </div></div></div>
+    <div class="col-6 col-md-3"><div class="card ins-card h-100"><div class="card-body py-3">
+        <div class="label">Sessions</div><div class="value">{{ '{:,}'.format(distinct_runs) }}</div>
+    </div></div></div>
+    <div class="col-6 col-md-3"><div class="card ins-card h-100"><div class="card-body py-3">
+        <div class="label">Error Events</div><div class="value">{{ '{:,}'.format(error_event_total) }}</div>
+    </div></div></div>
+    <div class="col-6 col-md-3"><div class="card ins-card h-100"><div class="card-body py-3">
+        <div class="label">Survey Responses</div>
+        <div class="value">
+            <span class="rating-good">{{ ratings.good }}</span><span class="text-muted">/</span><span class="rating-fine">{{ ratings.fine }}</span><span class="text-muted">/</span><span class="rating-bad">{{ ratings.bad }}</span>
+        </div>
+        <div class="label mt-1">good / fine / bad</div>
+    </div></div></div>
+</div>
+
+<!-- Activity -->
+<div class="card mb-3"><div class="card-body">
+    <div class="label mb-2" style="color:#6b7280;text-transform:uppercase;font-size:0.72rem;">
+        <i class="fas fa-calendar-day me-1"></i>Activity — events / day (last 14 days)
+    </div>
+    <div class="bars">
+        {% for a in activity %}
+        <div class="bar-col" title="{{ a.date }}: {{ a.count }} events">
+            <div class="n">{{ a.count if a.count else '' }}</div>
+            <div class="bar" style="height: {{ (a.count / activity_max * 100)|round(0,'floor') if activity_max else 0 }}%;"></div>
+            <div class="day">{{ a.date }}</div>
+        </div>
+        {% endfor %}
+    </div>
+</div></div>
+
+<!-- Session stats from tengu_exit -->
+{% if sess.count %}
+<div class="card mb-3"><div class="card-body">
+    <div class="label mb-2" style="color:#6b7280;text-transform:uppercase;font-size:0.72rem;">
+        <i class="fas fa-flag-checkered me-1"></i>Completed Sessions ({{ sess.count }})
+    </div>
+    <div class="row text-center g-2">
+        <div class="col-6 col-md"><div class="value" style="font-size:1.2rem;">{{ (sess.wall_ms / 3600000)|round(1) }}h</div><div class="label">Total wall time</div></div>
+        <div class="col-6 col-md"><div class="value" style="font-size:1.2rem;">{{ (sess.api_ms / 60000)|round(1) }}m</div><div class="label">Total API time</div></div>
+        <div class="col-6 col-md"><div class="value text-success" style="font-size:1.2rem;">+{{ '{:,}'.format(sess.added) }}</div><div class="label">Lines added</div></div>
+        <div class="col-6 col-md"><div class="value text-danger" style="font-size:1.2rem;">−{{ '{:,}'.format(sess.removed) }}</div><div class="label">Lines removed</div></div>
+        <div class="col-6 col-md"><div class="value" style="font-size:1.2rem;">{{ '{:,}'.format(sess.out_tok) }}</div><div class="label">Output tokens</div></div>
+    </div>
+</div></div>
+{% endif %}
+
+<!-- Breakdowns -->
+<div class="row g-3">
+    <div class="col-md-6"><div class="card h-100"><div class="card-body">
+        <div class="label mb-2" style="text-transform:uppercase;font-size:0.72rem;color:#6b7280;"><i class="fas fa-terminal me-1"></i>Top Slash Commands</div>
+        {{ ranklist(top_commands) }}
+    </div></div></div>
+    <div class="col-md-6"><div class="card h-100"><div class="card-body">
+        <div class="label mb-2" style="text-transform:uppercase;font-size:0.72rem;color:#6b7280;"><i class="fas fa-book me-1"></i>Top Skills Loaded</div>
+        {{ ranklist(top_skills) }}
+    </div></div></div>
+    <div class="col-md-6"><div class="card h-100"><div class="card-body">
+        <div class="label mb-2" style="text-transform:uppercase;font-size:0.72rem;color:#6b7280;"><i class="fas fa-microchip me-1"></i>Models Used</div>
+        {{ ranklist(top_models) }}
+    </div></div></div>
+    <div class="col-md-6"><div class="card h-100"><div class="card-body">
+        <div class="label mb-2" style="text-transform:uppercase;font-size:0.72rem;color:#6b7280;"><i class="fas fa-triangle-exclamation me-1"></i>Unhandled Rejections</div>
+        {{ ranklist(top_errors) }}
+    </div></div></div>
+</div>
+{% endblock %}

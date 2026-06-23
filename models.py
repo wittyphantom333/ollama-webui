@@ -376,3 +376,57 @@ class EventRecord(db.Model):
     key_prefix = db.Column(db.String(20), nullable=True)
     created_at = db.Column(db.DateTime, default=_utcnow, index=True)
 
+
+class TraceSpan(db.Model):
+    """One OpenTelemetry span from the CLI's deep-tracing exporter.
+
+    Spans form a tree per `trace_id` (one interaction → llm_request → tool/hook
+    children). Captured when the CLI runs with tracing enabled
+    (VIVUS_CODE_ENABLE_TRACING, default on in the launcher) and forwarded by the
+    proxy as OTLP/JSON. Attributes can carry detailed content (system prompts,
+    model output, tool I/O) — treat as potentially sensitive.
+    """
+    __tablename__ = 'trace_spans'
+
+    id = db.Column(db.Integer, primary_key=True)
+    trace_id = db.Column(db.String(40), nullable=False, index=True)
+    span_id = db.Column(db.String(24), nullable=False, index=True)
+    parent_span_id = db.Column(db.String(24), nullable=True, index=True)
+    name = db.Column(db.String(120), nullable=False)
+    # span.type attribute: interaction / llm_request / tool / tool.execution / hook
+    span_type = db.Column(db.String(40), nullable=True, index=True)
+    start_ns = db.Column(db.BigInteger, nullable=True)
+    end_ns = db.Column(db.BigInteger, nullable=True)
+    duration_ms = db.Column(db.Integer, nullable=True)
+    # OTEL status: 0 unset / 1 ok / 2 error
+    status_code = db.Column(db.Integer, nullable=True)
+    # Resolved portal user + session/run grouping (best-effort from attributes).
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True, index=True)
+    session_id = db.Column(db.String(64), nullable=True, index=True)
+    # Full span attributes as JSON (size-capped on ingest).
+    attributes_json = db.Column(db.Text, nullable=True)
+    key_prefix = db.Column(db.String(20), nullable=True)
+    created_at = db.Column(db.DateTime, default=_utcnow, index=True)
+
+
+class TraceLog(db.Model):
+    """One OpenTelemetry log record from the CLI's tracing exporter.
+
+    Carries system-prompt / new-context payloads emitted alongside spans
+    (logOTelEvent). Linked to a span/trace when the SDK includes the IDs.
+    """
+    __tablename__ = 'trace_logs'
+
+    id = db.Column(db.Integer, primary_key=True)
+    trace_id = db.Column(db.String(40), nullable=True, index=True)
+    span_id = db.Column(db.String(24), nullable=True)
+    severity = db.Column(db.String(20), nullable=True)
+    body = db.Column(db.Text, nullable=True)
+    attributes_json = db.Column(db.Text, nullable=True)
+    time_ns = db.Column(db.BigInteger, nullable=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True, index=True)
+    session_id = db.Column(db.String(64), nullable=True, index=True)
+    key_prefix = db.Column(db.String(20), nullable=True)
+    created_at = db.Column(db.DateTime, default=_utcnow, index=True)
+
+
