@@ -31,21 +31,51 @@
   .rating-bad { color: #dc2626; } .rating-dismissed { color: #6b7280; }
   [data-theme="dark"] .rating-good { color: #4ade80; } [data-theme="dark"] .rating-fine { color: #60a5fa; }
   [data-theme="dark"] .rating-bad { color: #f87171; } [data-theme="dark"] .rating-dismissed { color: #9ca3af; }
+
+  .filter-bar { gap: 6px; flex-wrap: wrap; }
+  .rank-row.clickable { cursor: pointer; border-radius: 4px; padding: 4px 6px; margin: 0 -6px; }
+  .rank-row.clickable:hover { background: rgba(99,102,241,0.10); }
+  .user-row.linked { cursor: pointer; }
+  .user-row.linked:hover { background: rgba(37,99,235,0.06); }
+  [data-theme="dark"] .user-row.linked:hover { background: rgba(96,165,250,0.10); }
+  #drillBody td, #drillBody th { font-size: 0.8rem; padding: 4px 8px; }
+  #drillBody .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 </style>
 {% endblock %}
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-3">
+<div class="d-flex justify-content-between align-items-center mb-2">
     <h2 class="mb-0"><i class="fas fa-chart-line me-2"></i>Insights</h2>
     <a href="{{ url_for('api.admin_events') }}" class="btn btn-sm btn-outline-secondary">
         <i class="fas fa-wave-square me-1"></i>Raw events
     </a>
 </div>
 
-{% macro ranklist(rows, color_total) %}
+<!-- Date filter: presets or a custom range -->
+<form method="get" action="{{ url_for('api.admin_insights') }}" class="d-flex align-items-center filter-bar mb-3">
+    {% if focus_user %}<input type="hidden" name="user_id" value="{{ focus_user.id }}">{% endif %}
+    <div class="btn-group btn-group-sm" role="group">
+        {% for p, lbl in [('24h','24h'),('7d','7d'),('14d','14d'),('30d','30d'),('90d','90d'),('all','All')] %}
+        <a class="btn {{ 'btn-primary' if preset == p else 'btn-outline-secondary' }}"
+           href="{{ url_for('api.admin_insights', preset=p) }}{{ ('&user_id=' ~ focus_user.id) if focus_user else '' }}">{{ lbl }}</a>
+        {% endfor %}
+    </div>
+    <span class="text-muted small ms-1">or</span>
+    <input type="date" name="start" value="{{ start_val }}" class="form-control form-control-sm" style="width:auto;">
+    <span class="text-muted">→</span>
+    <input type="date" name="end" value="{{ end_val }}" class="form-control form-control-sm" style="width:auto;">
+    <button type="submit" class="btn btn-sm btn-primary">Apply</button>
+    {% if focus_user %}
+    <a class="btn btn-sm btn-outline-danger ms-2" href="{{ url_for('api.admin_insights', **date_kwargs) }}"
+       title="Clear user filter"><i class="fas fa-user me-1"></i>{{ focus_user.username }} <i class="fas fa-times ms-1"></i></a>
+    {% endif %}
+</form>
+
+{% macro ranklist(rows, dtype=None) %}
     {% set top = rows[0][1] if rows else 1 %}
     {% for name, cnt in rows %}
-    <div class="rank-row">
-        <div class="rank-name" style="max-width:42%;" title="{{ name }}">{{ name }}</div>
+    <div class="rank-row {{ 'clickable' if dtype }}"
+         {% if dtype %}data-value="{{ name|e }}" onclick="drill('{{ dtype }}', this.dataset.value)" title="Click to see who used: {{ name }}"{% else %}title="{{ name }}"{% endif %}>
+        <div class="rank-name" style="max-width:42%;">{{ name }}</div>
         <div class="rank-bar-wrap"><div class="rank-bar" style="width: {{ (cnt / top * 100)|round(0, 'floor') }}%;"></div></div>
         <div class="rank-count">{{ cnt }}</div>
     </div>
@@ -76,7 +106,7 @@
 <!-- Activity -->
 <div class="card mb-3"><div class="card-body">
     <div class="label mb-2" style="color:#6b7280;text-transform:uppercase;font-size:0.72rem;">
-        <i class="fas fa-calendar-day me-1"></i>Activity — events / day (last 14 days)
+        <i class="fas fa-calendar-day me-1"></i>Activity — events per {{ activity_gran }}
     </div>
     <div class="bars">
         {% for a in activity %}
@@ -88,6 +118,39 @@
         {% endfor %}
     </div>
 </div></div>
+
+<!-- Who was active (admin, unfocused) -->
+{% if is_admin and by_user %}
+<div class="card mb-3"><div class="card-body">
+    <div class="label mb-2" style="color:#6b7280;text-transform:uppercase;font-size:0.72rem;">
+        <i class="fas fa-users me-1"></i>Who was active ({{ by_user|length }}) — click a row to drill into that user
+    </div>
+    <div class="table-responsive">
+    <table class="table table-sm table-hover align-middle mb-0">
+        <thead><tr class="text-muted small">
+            <th>User</th><th class="text-end">Events</th><th class="text-end">Sessions</th>
+            <th class="text-end">Cost</th><th class="text-end">Lines +/−</th><th class="text-end">Last active (UTC)</th>
+        </tr></thead>
+        <tbody>
+        {% for u in by_user %}
+        <tr class="user-row {{ 'linked' if u.user_id }}"
+            {% if u.user_id %}onclick="window.location='{{ url_for('api.admin_insights', user_id=u.user_id, **date_kwargs) }}'"{% endif %}>
+            <td>
+                {{ u.username }}{% if u.is_admin %} <span class="badge bg-secondary">admin</span>{% endif %}
+                {% if u.email %}<div class="text-muted small">{{ u.email }}</div>{% endif %}
+            </td>
+            <td class="text-end">{{ '{:,}'.format(u.events) }}</td>
+            <td class="text-end">{{ '{:,}'.format(u.sessions) }}</td>
+            <td class="text-end">{{ '${:.2f}'.format(u.cost) if u.cost else '—' }}</td>
+            <td class="text-end"><span class="text-success">+{{ u.added }}</span>/<span class="text-danger">−{{ u.removed }}</span></td>
+            <td class="text-end text-muted small">{{ u.last.strftime('%Y-%m-%d %H:%M') if u.last else '—' }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    </div>
+</div></div>
+{% endif %}
 
 <!-- Session stats from tengu_exit -->
 {% if sess.count %}
@@ -109,19 +172,68 @@
 <div class="row g-3">
     <div class="col-md-6"><div class="card h-100"><div class="card-body">
         <div class="label mb-2" style="text-transform:uppercase;font-size:0.72rem;color:#6b7280;"><i class="fas fa-terminal me-1"></i>Top Slash Commands</div>
-        {{ ranklist(top_commands) }}
+        {{ ranklist(top_commands, 'command') }}
     </div></div></div>
     <div class="col-md-6"><div class="card h-100"><div class="card-body">
         <div class="label mb-2" style="text-transform:uppercase;font-size:0.72rem;color:#6b7280;"><i class="fas fa-book me-1"></i>Top Skills Loaded</div>
-        {{ ranklist(top_skills) }}
+        {{ ranklist(top_skills, 'skill') }}
     </div></div></div>
     <div class="col-md-6"><div class="card h-100"><div class="card-body">
         <div class="label mb-2" style="text-transform:uppercase;font-size:0.72rem;color:#6b7280;"><i class="fas fa-microchip me-1"></i>Models Used</div>
-        {{ ranklist(top_models) }}
+        {{ ranklist(top_models, 'model') }}
     </div></div></div>
     <div class="col-md-6"><div class="card h-100"><div class="card-body">
         <div class="label mb-2" style="text-transform:uppercase;font-size:0.72rem;color:#6b7280;"><i class="fas fa-triangle-exclamation me-1"></i>Unhandled Rejections</div>
-        {{ ranklist(top_errors) }}
+        {{ ranklist(top_errors, 'error') }}
     </div></div></div>
 </div>
+
+<!-- Drill-down modal: who used a given command/skill/model/error -->
+<div class="modal fade" id="drillModal" tabindex="-1">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="drillTitle">Detail</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div id="drillLoading" class="text-muted">Loading…</div>
+        <div class="table-responsive"><table class="table table-sm table-hover"><thead><tr class="text-muted small">
+          <th>User</th><th>When (UTC)</th><th>Run</th><th>Client</th><th>Value</th>
+        </tr></thead><tbody id="drillBody"></tbody></table></div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const DRILL_LABEL = { command: 'Slash command', skill: 'Skill', model: 'Model', error: 'Error' };
+function esc(s) { const d = document.createElement('div'); d.textContent = (s == null ? '' : String(s)); return d.innerHTML; }
+function drill(type, value) {
+  const params = new URLSearchParams(window.location.search);
+  params.set('type', type);
+  params.set('value', value);
+  document.getElementById('drillTitle').textContent = (DRILL_LABEL[type] || type) + ': ' + value;
+  document.getElementById('drillBody').innerHTML = '';
+  const loading = document.getElementById('drillLoading');
+  loading.style.display = ''; loading.textContent = 'Loading…';
+  new bootstrap.Modal(document.getElementById('drillModal')).show();
+  fetch('{{ url_for("api.admin_insights_detail") }}?' + params.toString())
+    .then(r => r.json())
+    .then(d => {
+      loading.style.display = 'none';
+      const tb = document.getElementById('drillBody');
+      if (!d.rows || !d.rows.length) { tb.innerHTML = '<tr><td colspan="5" class="text-muted">No matching events in this window.</td></tr>'; return; }
+      document.getElementById('drillTitle').textContent += '  ·  ' + d.count + ' event' + (d.count === 1 ? '' : 's');
+      tb.innerHTML = d.rows.map(r =>
+        '<tr><td>' + esc(r.user) + '</td><td class="mono">' + esc(r.ts) + '</td>' +
+        '<td class="mono">' + esc(r.run_id) + '</td><td>' + esc(r.client) + '</td>' +
+        '<td class="mono">' + esc(r.value) + '</td></tr>'
+      ).join('');
+    })
+    .catch(() => { loading.textContent = 'Failed to load detail.'; });
+}
+</script>
 {% endblock %}

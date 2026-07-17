@@ -15,7 +15,7 @@ from flask_login import login_required, current_user
 from models import (
     db, ApiKey, UsageRecord, SiteSettings, CloudProvider, ToolCall,
     OAuthAuthCode, OAuthToken, OAUTH_ALLOWED_CLIENT_IDS, OAUTH_GRANTED_SCOPE, Feedback,
-    EventRecord, TraceSpan, TraceLog, Group,
+    EventRecord, TraceSpan, TraceLog, Group, User,
 )
 
 api_bp = Blueprint('api', __name__, template_folder='templates')
@@ -1165,41 +1165,119 @@ def admin_events():
 # Portal UI — aggregate insights from CLI events
 # ---------------------------------------------------------------------------
 
+def _insights_date_range(now):
+    """Resolve the insights date window from ?start/?end (YYYY-MM-DD) or ?preset.
+    Returns (start_dt, end_dt, preset) where a None start means 'all time'."""
+    from datetime import timedelta
+
+    def _parse_d(s, end=False):
+        try:
+            d = datetime.strptime((s or '').strip(), '%Y-%m-%d').replace(tzinfo=timezone.utc)
+            return d.replace(hour=23, minute=59, second=59, microsecond=999999) if end else d
+        except (ValueError, TypeError):
+            return None
+
+    preset = request.args.get('preset', '14d')
+    start_dt = _parse_d(request.args.get('start'))
+    end_dt = _parse_d(request.args.get('end'), end=True)
+    if start_dt or end_dt:
+        preset = 'custom'
+        end_dt = end_dt or now
+        start_dt = start_dt or (end_dt - timedelta(days=14))
+    elif preset == 'all':
+        start_dt, end_dt = None, now
+    else:
+        _pd = {'24h': 1, '7d': 7, '14d': 14, '30d': 30, '90d': 90}
+        if preset not in _pd:
+            preset = '14d'
+        start_dt, end_dt = now - timedelta(days=_pd[preset]), now
+    return start_dt, end_dt, preset
+
+
 @api_bp.route('/admin/insights')
 @login_required
 def admin_insights():
-    """Aggregate insights computed from the tengu_* event stream: activity over
-    time, top slash commands, top skills, errors, models, and session stats
-    (cost/duration/lines from tengu_exit). Admin = all users; user = own."""
+    """Aggregate insights from the tengu_* event stream: activity over time, top
+    slash commands, skills, errors, models, session stats, and a per-user
+    breakdown. Filterable by date range (?preset= or ?start=&end=) and drillable
+    to a single user (?user_id=). Admin = all users; user = own."""
     import json as _json
     from collections import Counter, defaultdict
     from datetime import timedelta
     from sqlalchemy import func
 
     is_admin = current_user.is_admin
+    now = datetime.now(timezone.utc)
+    start_dt, end_dt, preset = _insights_date_range(now)
+    start_val = start_dt.strftime('%Y-%m-%d') if (start_dt and preset == 'custom') else ''
+    end_val = end_dt.strftime('%Y-%m-%d') if (end_dt and preset == 'custom') else ''
+
+    # Drill-down: focus a single user (admin only; users are always scoped to self).
+    focus_user = None
+    focus_user_id = None
+    if is_admin:
+        _fid = request.args.get('user_id', type=int)
+        if _fid:
+            focus_user = db.session.get(User, _fid)
+            focus_user_id = focus_user.id if focus_user else None
+
+    # Query string carrying the active date filter, so drill links keep the window.
+    if preset == 'custom':
+        date_kwargs = {'start': start_val, 'end': end_val}
+    elif preset == 'all':
+        date_kwargs = {'preset': 'all'}
+    else:
+        date_kwargs = {'preset': preset}
 
     def _scope(q):
-        return q if is_admin else q.filter(EventRecord.user_id == current_user.id)
+        if not is_admin:
+            return q.filter(EventRecord.user_id == current_user.id)
+        if focus_user_id:
+            return q.filter(EventRecord.user_id == focus_user_id)
+        return q
 
-    total_events = _scope(db.session.query(func.count(EventRecord.id))).scalar() or 0
-    distinct_runs = _scope(db.session.query(func.count(func.distinct(EventRecord.run_id)))).scalar() or 0
+    def _range(q):
+        if start_dt is not None:
+            q = q.filter(EventRecord.created_at >= start_dt)
+        if end_dt is not None:
+            q = q.filter(EventRecord.created_at <= end_dt)
+        return q
 
-    # Activity over the last 14 days (UTC date buckets).
-    since = datetime.now(timezone.utc) - timedelta(days=14)
-    day_counts = Counter()
-    rows = _scope(db.session.query(EventRecord.created_at)).filter(EventRecord.created_at >= since).all()
-    for (ts,) in rows:
-        if ts:
-            day_counts[ts.strftime('%Y-%m-%d')] += 1
+    def _base(q):
+        return _range(_scope(q))
+
+    total_events = _base(db.session.query(func.count(EventRecord.id))).scalar() or 0
+    distinct_runs = _base(db.session.query(func.count(func.distinct(EventRecord.run_id)))).scalar() or 0
+
+    # Activity chart — granularity adapts to the selected window.
+    if start_dt is None:
+        chart_start, span_days = now - timedelta(days=90), 90
+    else:
+        chart_start = start_dt
+        span_days = max(1, int((end_dt - start_dt).total_seconds() // 86400) + 1)
+    if span_days <= 2:
+        fmt, step, gran = '%Y-%m-%dT%H', timedelta(hours=1), 'hour'
+    elif span_days <= 60:
+        fmt, step, gran = '%Y-%m-%d', timedelta(days=1), 'day'
+    else:
+        fmt, step, gran = '%Y-%W', timedelta(weeks=1), 'week'
+    bkt_expr = func.strftime(fmt, EventRecord.created_at)
+    brows = _range(_scope(db.session.query(
+        bkt_expr, func.count(EventRecord.id)
+    ))).group_by(bkt_expr).all()
+    bmap = {k: c for (k, c) in brows if k}
     activity = []
-    for i in range(13, -1, -1):
-        d = (datetime.now(timezone.utc) - timedelta(days=i)).strftime('%Y-%m-%d')
-        activity.append({'date': d[5:], 'count': day_counts.get(d, 0)})
+    cur, walk_end, _guard = chart_start, (end_dt or now), 0
+    while cur <= walk_end and _guard < 240:
+        lbl = cur.strftime('%Hh') if gran == 'hour' else cur.strftime('%m-%d')
+        activity.append({'date': lbl, 'count': bmap.get(cur.strftime(fmt), 0)})
+        cur += step
+        _guard += 1
     activity_max = max((a['count'] for a in activity), default=0)
 
-    # Pull metadata for the breakdown events (cap the scan for safety).
+    # Pull metadata for the breakdown events (date + scope filtered).
     def _meta_rows(event_name, limit=20000):
-        q = _scope(db.session.query(EventRecord.metadata_json)).filter(
+        q = _base(db.session.query(EventRecord.metadata_json)).filter(
             EventRecord.event == event_name
         ).order_by(EventRecord.id.desc()).limit(limit)
         out = []
@@ -1212,7 +1290,6 @@ def admin_insights():
                 continue
         return out
 
-    # Top slash commands (tengu_input_command.input).
     cmd_counter = Counter()
     for m in _meta_rows('tengu_input_command'):
         c = m.get('input')
@@ -1220,7 +1297,6 @@ def admin_insights():
             cmd_counter[str(c)[:40]] += 1
     top_commands = cmd_counter.most_common(12)
 
-    # Top skills (tengu_skill_loaded._PROTO_skill_name / skill_name).
     skill_counter = Counter()
     for m in _meta_rows('tengu_skill_loaded'):
         s = m.get('_PROTO_skill_name') or m.get('skill_name')
@@ -1228,7 +1304,6 @@ def admin_insights():
             skill_counter[str(s)[:60]] += 1
     top_skills = skill_counter.most_common(12)
 
-    # Models (tengu_api_query.model).
     model_counter = Counter()
     for m in _meta_rows('tengu_api_query'):
         mod = m.get('model')
@@ -1236,17 +1311,15 @@ def admin_insights():
             model_counter[str(mod)[:50]] += 1
     top_models = model_counter.most_common(10)
 
-    # Errors: unhandled rejections by type + total error/failure-ish events.
     err_counter = Counter()
     for m in _meta_rows('tengu_unhandled_rejection'):
         err_counter[str(m.get('error_name') or 'unknown')[:50]] += 1
     top_errors = err_counter.most_common(10)
-    error_event_total = _scope(db.session.query(func.count(EventRecord.id))).filter(
+    error_event_total = _base(db.session.query(func.count(EventRecord.id))).filter(
         (EventRecord.event.like('%_error%')) | (EventRecord.event.like('%rejection%')) |
         (EventRecord.event.like('%_failed%'))
     ).scalar() or 0
 
-    # Session stats from tengu_exit summaries.
     sess = {'count': 0, 'cost': 0.0, 'api_ms': 0, 'wall_ms': 0, 'added': 0, 'removed': 0, 'in_tok': 0, 'out_tok': 0}
     for m in _meta_rows('tengu_exit'):
         sess['count'] += 1
@@ -1258,11 +1331,47 @@ def admin_insights():
         sess['in_tok'] += int(m.get('last_session_total_input_tokens') or m.get('last_session_input_tokens') or 0)
         sess['out_tok'] += int(m.get('last_session_total_output_tokens') or m.get('last_session_output_tokens') or 0)
 
-    # Survey ratings tally.
     ratings = {'good': 0, 'fine': 0, 'bad': 0, 'dismissed': 0}
     for m in _meta_rows('tengu_feedback_survey_event'):
         if m.get('event_type') == 'responded' and m.get('response') in ratings:
             ratings[m['response']] += 1
+
+    # Per-user breakdown — who was active in the window (admin, unfocused view).
+    by_user = []
+    if is_admin and not focus_user_id:
+        urows = _range(db.session.query(
+            EventRecord.user_id,
+            func.count(EventRecord.id),
+            func.count(func.distinct(EventRecord.run_id)),
+            func.max(EventRecord.created_at),
+        )).group_by(EventRecord.user_id).all()
+        umap = {u.id: u for u in User.query.all()}
+        cbu = defaultdict(lambda: {'cost': 0.0, 'added': 0, 'removed': 0})
+        exq = _range(db.session.query(EventRecord.user_id, EventRecord.metadata_json)).filter(
+            EventRecord.event == 'tengu_exit'
+        ).order_by(EventRecord.id.desc()).limit(20000)
+        for uid, mj in exq.all():
+            if not mj:
+                continue
+            try:
+                m = _json.loads(mj)
+            except (ValueError, TypeError):
+                continue
+            cbu[uid]['cost'] += float(m.get('last_session_cost') or 0)
+            cbu[uid]['added'] += int(m.get('last_session_lines_added') or 0)
+            cbu[uid]['removed'] += int(m.get('last_session_lines_removed') or 0)
+        for uid, ev, runs, last in urows:
+            u = umap.get(uid)
+            c = cbu.get(uid, {})
+            by_user.append({
+                'user_id': uid,
+                'username': (u.username if u else ('(anonymous)' if uid is None else 'user %s' % uid)),
+                'email': (u.email if u else ''),
+                'is_admin': bool(u.is_admin) if u else False,
+                'events': ev, 'sessions': runs, 'last': last,
+                'cost': c.get('cost', 0.0), 'added': c.get('added', 0), 'removed': c.get('removed', 0),
+            })
+        by_user.sort(key=lambda x: x['events'], reverse=True)
 
     return render_template(
         'admin_insights.html',
@@ -1270,6 +1379,7 @@ def admin_insights():
         distinct_runs=distinct_runs,
         activity=activity,
         activity_max=activity_max,
+        activity_gran=gran,
         top_commands=top_commands,
         top_skills=top_skills,
         top_models=top_models,
@@ -1279,7 +1389,81 @@ def admin_insights():
         ratings=ratings,
         rating_labels=_RATING_LABELS,
         is_admin=is_admin,
+        by_user=by_user,
+        preset=preset,
+        start_val=start_val,
+        end_val=end_val,
+        focus_user=focus_user,
+        date_kwargs=date_kwargs,
     )
+
+
+# Metadata event + keys behind each drillable insight dimension.
+_INSIGHT_DETAIL_SPEC = {
+    'command': ('tengu_input_command', ['input']),
+    'skill': ('tengu_skill_loaded', ['_PROTO_skill_name', 'skill_name']),
+    'model': ('tengu_api_query', ['model']),
+    'error': ('tengu_unhandled_rejection', ['error_name']),
+}
+
+
+@api_bp.route('/admin/insights/detail')
+@login_required
+def admin_insights_detail():
+    """JSON drill-down: who used a given command/skill/model/error, with when +
+    run + client. Honors the same date/user filters as the insights page."""
+    import json as _json
+
+    is_admin = current_user.is_admin
+    now = datetime.now(timezone.utc)
+    start_dt, end_dt, _ = _insights_date_range(now)
+
+    spec = _INSIGHT_DETAIL_SPEC.get(request.args.get('type', ''))
+    if not spec:
+        return jsonify({'error': 'unknown type'}), 400
+    event_name, keys = spec
+    value = request.args.get('value', '')
+
+    q = db.session.query(EventRecord).filter(EventRecord.event == event_name)
+    if not is_admin:
+        q = q.filter(EventRecord.user_id == current_user.id)
+    else:
+        _fid = request.args.get('user_id', type=int)
+        if _fid:
+            q = q.filter(EventRecord.user_id == _fid)
+    if start_dt is not None:
+        q = q.filter(EventRecord.created_at >= start_dt)
+    if end_dt is not None:
+        q = q.filter(EventRecord.created_at <= end_dt)
+    q = q.order_by(EventRecord.id.desc()).limit(1500)
+
+    umap = {u.id: u for u in User.query.all()}
+    rows = []
+    for r in q.all():
+        try:
+            m = _json.loads(r.metadata_json or '{}')
+        except (ValueError, TypeError):
+            m = {}
+        v = ''
+        for k in keys:
+            if m.get(k):
+                v = str(m[k])
+                break
+        # Aggregates truncate the displayed value, so match by prefix.
+        if value and v[:len(value)] != value:
+            continue
+        u = umap.get(r.user_id)
+        rows.append({
+            'user': (u.username if u else ('(anonymous)' if r.user_id is None else 'user %s' % r.user_id)),
+            'user_id': r.user_id,
+            'ts': (r.created_at.strftime('%Y-%m-%d %H:%M') if r.created_at else ''),
+            'run_id': (r.run_id or '')[:12],
+            'client': r.client or '',
+            'value': v[:160],
+        })
+        if len(rows) >= 400:
+            break
+    return jsonify({'type': request.args.get('type'), 'value': value, 'count': len(rows), 'rows': rows})
 
 
 # ---------------------------------------------------------------------------
