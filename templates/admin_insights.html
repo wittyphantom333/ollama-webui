@@ -189,7 +189,7 @@
 </div>
 
 <!-- Drill-down modal: who used a given command/skill/model/error -->
-<div class="modal fade" id="drillModal" tabindex="-1">
+<div class="modal fade" id="drillModal" tabindex="-1" aria-labelledby="drillTitle" aria-hidden="true">
   <div class="modal-dialog modal-lg modal-dialog-scrollable">
     <div class="modal-content">
       <div class="modal-header">
@@ -211,6 +211,11 @@
 <script>
 const DRILL_LABEL = { command: 'Slash command', skill: 'Skill', model: 'Model', error: 'Error' };
 function esc(s) { const d = document.createElement('div'); d.textContent = (s == null ? '' : String(s)); return d.innerHTML; }
+// Bootstrap modals must be a top-level element to trap focus / stack correctly.
+// Nested inside the page layout the focus trap misbehaves (esp. on 5.3-alpha),
+// so move it to <body> once and reuse a single instance.
+const drillEl = document.getElementById('drillModal');
+if (drillEl && drillEl.parentElement !== document.body) document.body.appendChild(drillEl);
 function drill(type, value) {
   const params = new URLSearchParams(window.location.search);
   params.set('type', type);
@@ -219,7 +224,7 @@ function drill(type, value) {
   document.getElementById('drillBody').innerHTML = '';
   const loading = document.getElementById('drillLoading');
   loading.style.display = ''; loading.textContent = 'Loading…';
-  new bootstrap.Modal(document.getElementById('drillModal')).show();
+  bootstrap.Modal.getOrCreateInstance(drillEl).show();
   fetch('{{ url_for("api.admin_insights_detail") }}?' + params.toString())
     .then(r => r.json())
     .then(d => {
