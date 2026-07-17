@@ -812,30 +812,213 @@ def _summarize_message(m):
     return {'role': role or 'unknown', 'parts': parts}
 
 
+def _recover_partial_json(payload_str):
+    """Recover the valid leading portion of a JSON object truncated mid-stream.
+
+    Legacy feedback rows (stored before _bounded_payload_json) were size-capped
+    by slicing the serialized JSON at a fixed byte limit. That slice cuts through
+    whatever value was mid-write — typically a long embedded string such as
+    ``rawTranscriptJsonl`` — leaving an unterminated string and unbalanced
+    brackets, so the whole payload fails to parse. This scans the prefix,
+    tracking the furthest point at which the structure could be validly closed
+    (just after a complete array element or object key/value pair), closes the
+    still-open containers there, and parses that. Returns
+    (obj, recovered_char_count) on success or (None, 0) otherwise.
+    """
+    import json as _json
+    stack = []            # each entry: ['{' | '[', state]
+    in_str = False
+    esc = False
+    best = None           # (truncate_index, closing_bracket_string)
+
+    def _mark(idx):
+        nonlocal best
+        closers = ''.join('}' if c[0] == '{' else ']' for c in reversed(stack))
+        best = (idx, closers)
+
+    i, n = 0, len(payload_str)
+    while i < n:
+        ch = payload_str[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == '\\':
+                esc = True
+            elif ch == '"':
+                in_str = False
+                if stack:
+                    top = stack[-1]
+                    if top[0] == '{':
+                        # A string in 'key' position is an object key (we cannot
+                        # close right after it); in 'value' position it's a value.
+                        if top[1] == 'key':
+                            top[1] = 'colon'
+                        elif top[1] == 'value':
+                            top[1] = 'comma'
+                            _mark(i + 1)
+                    else:
+                        top[1] = 'comma'
+                        _mark(i + 1)
+                else:
+                    _mark(i + 1)
+            i += 1
+            continue
+        if ch in ' \t\r\n':
+            i += 1
+            continue
+        if ch == '"':
+            in_str = True
+            i += 1
+            continue
+        if ch in '{[':
+            stack.append([ch, 'key' if ch == '{' else 'value'])
+            i += 1
+            continue
+        if ch in '}]':
+            if stack:
+                stack.pop()
+            if stack:
+                stack[-1][1] = 'comma'
+            i += 1
+            _mark(i)
+            continue
+        if ch == ':':
+            if stack and stack[-1][0] == '{' and stack[-1][1] == 'colon':
+                stack[-1][1] = 'value'
+            i += 1
+            continue
+        if ch == ',':
+            if stack:
+                top = stack[-1]
+                top[1] = 'key' if top[0] == '{' else 'value'
+            i += 1
+            continue
+        # Bare literal: number / true / false / null. Consume to its end.
+        j = i
+        while j < n and payload_str[j] not in ',}]:" \t\r\n':
+            j += 1
+        if j >= n:
+            break  # literal runs to EOF — it may itself be truncated
+        if stack:
+            stack[-1][1] = 'comma'
+        _mark(j)
+        i = j
+
+    if best is None:
+        return None, 0
+    idx, closers = best
+    try:
+        return _json.loads(payload_str[:idx] + closers), idx
+    except Exception:
+        return None, 0
+
+
+def _messages_from_raw_jsonl(payload_str, limit=500):
+    """Salvage conversation bubbles from a ``rawTranscriptJsonl`` string value.
+
+    Some feedback payloads (notably large / "client ended early" sessions)
+    embed the transcript only as ``rawTranscriptJsonl`` — a JSON string whose
+    decoded value is JSONL, one transcript record per line — instead of a
+    structured ``transcript`` array. Legacy size-capped rows may also have this
+    string truncated mid-stream. Decode the longest valid prefix of the string
+    value, split it on real newlines, and summarize each complete record so
+    these rows render like the structured ones. Returns a (possibly empty) list
+    of ``{role, parts}`` dicts.
+    """
+    import json as _json
+    if not payload_str:
+        return []
+    key = '"rawTranscriptJsonl"'
+    i = payload_str.find(key)
+    if i < 0:
+        return []
+    # Step past the key and its colon to the opening quote of the value.
+    q = payload_str.find('"', i + len(key))
+    if q < 0:
+        return []
+    body = payload_str[q + 1:]
+    # Cut at the first UNESCAPED closing quote if the value is intact; a
+    # truncated value simply runs to end-of-string (no closing quote).
+    k, n = 0, len(body)
+    while k < n:
+        ch = body[k]
+        if ch == '\\':
+            k += 2
+            continue
+        if ch == '"':
+            body = body[:k]
+            break
+        k += 1
+    # Decode the JSON string body. Truncation only damages the last few chars
+    # (a dangling backslash or partial \uXXXX), so trim minimally until it
+    # unescapes.
+    decoded = None
+    for cut in range(0, 8):
+        frag = body if cut == 0 else body[:-cut]
+        try:
+            decoded = _json.loads('"' + frag + '"')
+            break
+        except Exception:
+            continue
+    if not decoded:
+        return []
+    msgs = []
+    for line in decoded.split('\n'):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = _json.loads(line)
+        except Exception:
+            continue  # truncated final line / non-JSON noise
+        summary = _summarize_message(rec)
+        if summary:
+            msgs.append(summary)
+        if len(msgs) >= limit:
+            break
+    return msgs
+
+
 def _parse_feedback_payload(payload_str):
     """Parse a stored feedback payload into displayable meta + conversation."""
     import json as _json
     out = {'meta': {}, 'messages': [], 'raw': payload_str or ''}
     if not payload_str:
         return out
+
+    truncated_note = None
     try:
         data = _json.loads(payload_str)
     except Exception:
-        # Best-effort salvage of top-level scalar meta from a truncated/invalid
-        # payload (e.g. legacy rows stored before bounded serialization).
-        import re as _re
-        for k in ('description', 'platform', 'version', 'datetime', 'message_count', 'terminal'):
-            mm = _re.search(r'"' + k + r'"\s*:\s*"?([^",}]*)', payload_str)
-            if mm and mm.group(1):
-                out['meta'][k] = mm.group(1).strip()
-        out['meta']['_truncated'] = 'payload was truncated/corrupted — showing recovered fields only'
-        return out
+        # Invalid JSON — almost always a legacy row capped by slicing the JSON
+        # string mid-value. Recover the valid prefix so the surviving fields
+        # (scalars, errors[], any complete transcript entries) still render
+        # nicely instead of dumping the raw escaped one-line blob.
+        data, kept = _recover_partial_json(payload_str)
+        if isinstance(data, dict):
+            truncated_note = (
+                'payload was truncated/corrupted — recovered %d of %d characters; '
+                'trailing data (e.g. transcript tail) was dropped'
+                % (kept, len(payload_str))
+            )
+        else:
+            # Last resort: regex out top-level scalar meta from the raw text.
+            import re as _re
+            for k in ('description', 'platform', 'version', 'datetime', 'message_count', 'terminal'):
+                mm = _re.search(r'"' + k + r'"\s*:\s*"?([^",}]*)', payload_str)
+                if mm and mm.group(1):
+                    out['meta'][k] = mm.group(1).strip()
+            out['meta']['_truncated'] = 'payload was truncated/corrupted — showing recovered fields only'
+            return out
+
     if not isinstance(data, dict):
         return out
     for k in ('trigger', 'description', 'platform', 'version', 'gitRepo',
               'message_count', 'datetime', '_truncated'):
         if k in data and data[k] not in (None, ''):
             out['meta'][k] = data[k]
+    if truncated_note:
+        out['meta']['_truncated'] = truncated_note
     try:
         out['raw'] = _json.dumps(data, indent=2, ensure_ascii=False)
     except Exception:
@@ -844,6 +1027,11 @@ def _parse_feedback_payload(payload_str):
     if isinstance(transcript, list):
         msgs = [_summarize_message(m) for m in transcript]
         out['messages'] = [m for m in msgs if m]
+    # Fallback: payloads that carry the conversation only as rawTranscriptJsonl
+    # (no structured transcript array) — including truncated legacy rows where
+    # that string is the sole surviving conversation data — still render bubbles.
+    if not out['messages']:
+        out['messages'] = _messages_from_raw_jsonl(payload_str)
     return out
 
 
