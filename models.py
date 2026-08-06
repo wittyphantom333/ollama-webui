@@ -206,6 +206,12 @@ class ToolCall(db.Model):
     Populated only when the proxy runs with CAPTURE_TOOL_DETAILS=1. The proxy
     redacts secrets and caps field sizes before sending these, but treat the
     contents as potentially sensitive (source code, shell commands).
+
+    The result (result_content / result_is_error) is populated LATER, in a
+    separate request: the tool_use and its tool_result always live in
+    different proxy requests (the CLI sends the result on its NEXT turn), so
+    the proxy re-sends tool_use_id-keyed result records and ingest_metrics
+    UPDATEs the matching row here rather than creating a new one.
     """
     __tablename__ = 'tool_calls'
 
@@ -213,6 +219,7 @@ class ToolCall(db.Model):
     usage_record_id = db.Column(db.Integer, db.ForeignKey('usage_records.id'),
                                 nullable=False, index=True)
     seq = db.Column(db.Integer, default=0)              # order within the turn
+    tool_use_id = db.Column(db.String(100), nullable=True, index=True)  # Anthropic tool_use.id — links to its result
     name = db.Column(db.String(80), nullable=False)     # tool name as called: Write, Edit, Bash
     action = db.Column(db.String(20), nullable=True)    # write / edit / bash / delete / move
     target = db.Column(db.Text, nullable=True)          # file path, move spec, or bash description
@@ -221,6 +228,8 @@ class ToolCall(db.Model):
     new_text = db.Column(db.Text, nullable=True)        # edit: new content / notebook source
     content = db.Column(db.Text, nullable=True)         # write: full file content
     bytes = db.Column(db.Integer, default=0)            # size of written content
+    result_content = db.Column(db.Text, nullable=True)      # what the tool actually returned
+    result_is_error = db.Column(db.Boolean, default=False)  # tool_result.is_error from the CLI
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
 

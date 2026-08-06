@@ -109,6 +109,29 @@ with app.app_context():
             ))
             db.session.commit()
             app.logger.info('migrated: added usage_records.raw_text column')
+        # Tool-result correlation: the tool_use and its tool_result always
+        # arrive in separate proxy requests, so the result is UPDATEd onto
+        # the existing tool_calls row (found by tool_use_id) later rather
+        # than inserted with the call itself.
+        _tc_cols = {c['name'] for c in _sa_inspect(db.engine).get_columns('tool_calls')}
+        if 'tool_use_id' not in _tc_cols:
+            db.session.execute(_sa_text(
+                "ALTER TABLE tool_calls ADD COLUMN tool_use_id VARCHAR(100)"
+            ))
+            db.session.commit()
+            app.logger.info('migrated: added tool_calls.tool_use_id column')
+        if 'result_content' not in _tc_cols:
+            db.session.execute(_sa_text(
+                "ALTER TABLE tool_calls ADD COLUMN result_content TEXT"
+            ))
+            db.session.commit()
+            app.logger.info('migrated: added tool_calls.result_content column')
+        if 'result_is_error' not in _tc_cols:
+            db.session.execute(_sa_text(
+                "ALTER TABLE tool_calls ADD COLUMN result_is_error BOOLEAN DEFAULT 0"
+            ))
+            db.session.commit()
+            app.logger.info('migrated: added tool_calls.result_is_error column')
     except Exception as _mig_err:  # pragma: no cover - best-effort migration
         db.session.rollback()
         app.logger.warning('schema migration check failed: %s', _mig_err)

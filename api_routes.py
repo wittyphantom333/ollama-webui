@@ -283,6 +283,7 @@ def ingest_metrics():
             db.session.add(ToolCall(
                 usage_record_id=record.id,
                 seq=i,
+                tool_use_id=(str(tc.get('id'))[:100] if tc.get('id') else None),
                 name=str(tc.get('name'))[:80],
                 action=(str(tc.get('action'))[:20] if tc.get('action') else None),
                 target=_cap(tc.get('target')),
@@ -292,6 +293,38 @@ def ingest_metrics():
                 content=_cap(tc.get('content')),
                 bytes=int(tc.get('bytes') or 0),
             ))
+
+    # Tool RESULTS — always arrive in a LATER request than the tool_use they
+    # answer (the CLI resends full history each turn; the freshest tool_result
+    # batch is for calls captured on a PRIOR ingest_metrics call). Correlate by
+    # tool_use_id and UPDATE that earlier row rather than inserting a new one.
+    # Scoped to this api_key's user so one user's results can never land on
+    # another user's row. Only the most recent still-empty match is updated,
+    # in case a tool_use_id were ever reused (shouldn't happen, but cheap to
+    # guard against clobbering an already-filled-in result).
+    tool_results = data.get('tool_results')
+    if isinstance(tool_results, list):
+        FIELD_CAP = 16000
+        for tr in tool_results[:50]:
+            if not isinstance(tr, dict) or not tr.get('tool_use_id'):
+                continue
+            content = tr.get('content')
+            if isinstance(content, str) and len(content) > FIELD_CAP:
+                content = content[:FIELD_CAP] + '\n…(truncated)'
+            match = (
+                ToolCall.query
+                .join(UsageRecord, ToolCall.usage_record_id == UsageRecord.id)
+                .filter(
+                    UsageRecord.user_id == api_key.user_id,
+                    ToolCall.tool_use_id == str(tr.get('tool_use_id'))[:100],
+                    ToolCall.result_content.is_(None),
+                )
+                .order_by(ToolCall.id.desc())
+                .first()
+            )
+            if match:
+                match.result_content = content
+                match.result_is_error = bool(tr.get('is_error'))
 
     db.session.commit()
 
@@ -1794,6 +1827,8 @@ def request_detail(request_id):
                 'new_text': tc.new_text,
                 'content': tc.content,
                 'bytes': tc.bytes,
+                'result_content': tc.result_content,
+                'result_is_error': bool(tc.result_is_error),
             }
             for tc in record.tool_calls.order_by(ToolCall.seq).all()
         ],
