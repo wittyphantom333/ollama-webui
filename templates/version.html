@@ -167,17 +167,37 @@
                     </div>
                     {% endif %}
                     
-                    <div class="d-flex">
-                        <button type="button" class="btn btn-outline-primary me-2" id="check-updates-btn">
+                    <div class="d-flex flex-wrap gap-2">
+                        <button type="button" class="btn btn-outline-primary" id="check-updates-btn">
                             <i class="fas fa-sync-alt me-1"></i> Check for Updates
                         </button>
-                        
+
                         {% if update_available %}
-                        <a href="https://github.com/ollama/ollama/releases/latest" target="_blank" class="btn btn-primary">
-                            <i class="fas fa-download me-1"></i> Get Update
+                        <a href="https://github.com/ollama/ollama/releases/latest" target="_blank" rel="noopener" class="btn btn-outline-secondary">
+                            <i class="fab fa-github me-1"></i> View Release Notes
                         </a>
                         {% endif %}
+
+                        {% if current_user.is_admin %}
+                        <form method="POST" action="{{ url_for('update_ollama') }}" class="d-inline"
+                              onsubmit="return confirm('This will run Ollama\'s official install script on the server to update it in place, then restart the ollama service. Any in-progress requests will be interrupted. Continue?');">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <button type="submit" class="btn {% if update_available %}btn-primary{% else %}btn-outline-secondary{% endif %}">
+                                <i class="fas fa-cloud-download-alt me-1"></i>
+                                {% if update_available %}Update Now{% else %}Reinstall / Re-check{% endif %}
+                            </button>
+                        </form>
+                        {% elif update_available %}
+                        <span class="text-muted small align-self-center">Ask an admin to update the server.</span>
+                        {% endif %}
                     </div>
+                    {% if current_user.is_admin %}
+                    <div class="form-text text-muted mt-2">
+                        Runs <code>curl -fsSL https://ollama.com/install.sh | sh</code> directly on the server and
+                        restarts <code>ollama.service</code>. Takes a few seconds to a couple of minutes depending on
+                        download size. Admin-only.
+                    </div>
+                    {% endif %}
                 </div>
             </div>
         </div>

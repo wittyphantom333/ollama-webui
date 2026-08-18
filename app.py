@@ -5,6 +5,7 @@ import json
 import os
 import time
 import hashlib
+import subprocess
 from threading import Lock
 from dotenv import load_dotenv
 import base64
@@ -174,6 +175,7 @@ OLLAMA_CREATE_TIMEOUT = 600    # /create (non-streaming)
 OLLAMA_PULL_TIMEOUT = 900      # /pull (non-streaming, large downloads)
 OLLAMA_STREAM_CONNECT = 5      # streaming endpoints: connect-only timeout
 GITHUB_TIMEOUT = 5             # api.github.com release lookups
+OLLAMA_UPDATE_TIMEOUT = 300    # official install.sh re-run (binary swap + service restart)
 
 # In-process TTL cache for the cheap metadata calls hammered by every page
 # load. Each gunicorn worker caches independently — cross-worker drift is
@@ -236,6 +238,18 @@ def cached_ollama(path, method='GET', body=None, ttl=None):
             for k, _ in sorted_keys[: _OLLAMA_CACHE_MAX // 2]:
                 _ollama_cache.pop(k, None)
     return data
+
+def invalidate_ollama_cache(path):
+    """Drop all cached entries for a given Ollama API path (any method/body),
+    so the next cached_ollama() call is forced to hit Ollama fresh instead of
+    serving a stale cached value. Used after actions that change server state
+    out-of-band from the cache (e.g. updating the Ollama binary — the /version
+    response changes without any request going through cached_ollama itself).
+    """
+    prefix_variants = (f"GET:{path}:", f"POST:{path}:")
+    with _ollama_cache_lock:
+        for k in [k for k in _ollama_cache if k.startswith(prefix_variants)]:
+            _ollama_cache.pop(k, None)
 
 @app.route('/')
 @login_required
@@ -808,6 +822,57 @@ def version():
                           update_available=update_available,
                           release_date=release_date,
                           changelog_markdown=changelog_markdown)
+
+@app.route('/admin/ollama/update', methods=['POST'])
+@login_required
+def update_ollama():
+    """Re-run Ollama's official install script on THIS server to update the
+    binary in place, then restart ollama.service. This is the standard,
+    Ollama-documented way to update a Linux install (the script detects an
+    existing install and upgrades it; it also handles the systemd restart
+    itself, invoking sudo internally if not already root).
+
+    Admin-only: this restarts a shared service used by every user currently
+    running an inference request, and executes a remote install script with
+    root privileges (via passwordless sudo for the service account).
+    """
+    if not current_user.is_admin:
+        flash('Admin access required.', 'danger')
+        return redirect(url_for('version'))
+
+    try:
+        result = subprocess.run(
+            ['sh', '-c', 'curl -fsSL https://ollama.com/install.sh | sh'],
+            capture_output=True, text=True, timeout=OLLAMA_UPDATE_TIMEOUT,
+        )
+        app.logger.info(
+            'ollama update by %s: exit=%s\n%s',
+            current_user.username, result.returncode, (result.stdout + result.stderr).strip(),
+        )
+        # Flash messages render as a single line in the UI (no <pre>/newline
+        # handling), so keep this to a short status — full installer output
+        # isn't dumped here, only the failure case's last line (the part
+        # most likely to explain what went wrong).
+        if result.returncode == 0:
+            # The /version cache entry is now stale (Ollama's version changed
+            # without going through cached_ollama) — drop it so the version
+            # page reflects the new binary immediately instead of the old
+            # cached value for up to 5 more minutes.
+            invalidate_ollama_cache('/version')
+            flash('Ollama update finished successfully — check the version below.', 'success')
+        else:
+            last_line = (result.stdout + result.stderr).strip().splitlines()[-1:] or ['(no output)']
+            flash(f'Ollama update FAILED (exit code {result.returncode}): {last_line[0][:300]}', 'danger')
+    except subprocess.TimeoutExpired:
+        flash(
+            f'Update timed out after {OLLAMA_UPDATE_TIMEOUT}s. It may still be running in the '
+            'background (large downloads can be slow) — check the version page again shortly.',
+            'warning',
+        )
+    except Exception as e:
+        flash(f'Error running Ollama update: {e}', 'danger')
+
+    return redirect(url_for('version'))
 
 # The parse_github_release_notes function is no longer used since we're displaying raw markdown
 
