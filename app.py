@@ -378,6 +378,55 @@ def pull_model():
             return redirect(url_for('pull_model'))
     return render_template('pull_model.html')
 
+
+@app.route('/pull/stream', methods=['POST'])
+@login_required
+def pull_model_stream():
+    """Relay Ollama's pull progress to the browser as NDJSON, one line per update.
+
+    The plain /pull route above posts with stream=False, so Ollama returns
+    nothing until the entire download completes -- which is why that page shows
+    no progress. Ollama emits {status, digest, total, completed} lines while
+    downloading; this just forwards them so the client can render a bar.
+    """
+    model_name = (request.form.get('model_name') or '').strip()
+    if not model_name:
+        return jsonify({'error': 'model_name is required'}), 400
+
+    def generate():
+        try:
+            with requests.post(
+                f"{OLLAMA_API_URL}/pull",
+                headers=ollama_headers(),
+                json={"model": model_name, "stream": True},
+                stream=True,
+                timeout=OLLAMA_PULL_TIMEOUT,
+            ) as resp:
+                if resp.status_code != 200:
+                    yield json.dumps({'error': f'Ollama returned HTTP {resp.status_code}'}) + '\n'
+                    return
+                # decode_unicode is unreliable here: Ollama sends
+                # application/x-ndjson with no charset, so requests leaves the
+                # lines as bytes and the concat below would blow up.
+                for line in resp.iter_lines():
+                    if not line:
+                        continue
+                    if isinstance(line, bytes):
+                        line = line.decode('utf-8', 'replace')
+                    yield line + '\n'
+        except requests.Timeout:
+            yield json.dumps({'error': 'Pull timed out. The download may still be running on the server.'}) + '\n'
+        except Exception as exc:
+            yield json.dumps({'error': str(exc)}) + '\n'
+
+    return Response(
+        generate(),
+        mimetype='application/x-ndjson',
+        # X-Accel-Buffering: nginx fronts this host and would otherwise buffer
+        # the whole response, defeating the streaming entirely.
+        headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
+    )
+
 @app.route('/create', methods=['GET'])
 @login_required
 def create_model_page():
