@@ -199,6 +199,9 @@
                         {% elif r.raw_text %}
                             <span class="chip" style="background:#e67e22;color:#fff;" title="Model emitted something tool-call-shaped we could not parse, and called no tool">no-tool</span>
                         {% endif %}
+                        {% if r.classifier_denied %}
+                            <span class="chip err-chip" title="Auto-mode classifier denied this action">denied</span>
+                        {% endif %}
                         <span class="chip model-chip">{{ r.model.replace(':latest','')[:15] }}</span>
                         {% if r.tier %}<span class="chip tier-chip">{{ r.tier }}</span>{% endif %}
                         {% if r.tool_names %}

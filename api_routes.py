@@ -271,6 +271,15 @@ def ingest_metrics():
     if isinstance(raw_text, str) and len(raw_text) > 20000:
         raw_text = raw_text[:20000] + '\n…(truncated)'
 
+    # Auto-mode classifier's own side-query: this row IS a classify_result
+    # call, captured (action='classify') only when CAPTURE_TOOL_DETAILS=1.
+    # target is 'deny'/'allow' — see normalizeToolCall in server.mjs.
+    tool_calls_raw = data.get('tool_calls')
+    classifier_denied = isinstance(tool_calls_raw, list) and any(
+        isinstance(tc, dict) and tc.get('action') == 'classify' and tc.get('target') == 'deny'
+        for tc in tool_calls_raw
+    )
+
     record = UsageRecord(
         user_id=api_key.user_id,
         api_key_id=api_key.id,
@@ -292,6 +301,7 @@ def ingest_metrics():
         salvaged=bool(data.get('salvaged')),
         salvaged_tools=salvaged_tools,
         raw_text=(raw_text or None),
+        classifier_denied=classifier_denied,
     )
     db.session.add(record)
     db.session.flush()  # assign record.id before linking tool calls

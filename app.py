@@ -111,6 +111,12 @@ with app.app_context():
             ))
             db.session.commit()
             app.logger.info('migrated: added usage_records.raw_text column')
+        if 'classifier_denied' not in _ur_cols:
+            db.session.execute(_sa_text(
+                "ALTER TABLE usage_records ADD COLUMN classifier_denied BOOLEAN DEFAULT 0"
+            ))
+            db.session.commit()
+            app.logger.info('migrated: added usage_records.classifier_denied column')
         # Tool-result correlation: the tool_use and its tool_result always
         # arrive in separate proxy requests, so the result is UPDATEd onto
         # the existing tool_calls row (found by tool_use_id) later rather

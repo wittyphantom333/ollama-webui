@@ -243,6 +243,12 @@ class UsageRecord(db.Model):
     salvaged_tools = db.Column(db.String(500), nullable=True)    # comma-separated recovered tool names
     raw_text = db.Column(db.Text, nullable=True)                 # capped raw model text (salvage / no-tool-despite-tools)
 
+    # True when this row IS a classify_result call (the auto-mode classifier's
+    # own side-query) and its shouldBlock came back true — i.e. the action it
+    # was asked to judge was denied. Only ever set when CAPTURE_TOOL_DETAILS=1
+    # (requires the tool's input, not just its name).
+    classifier_denied = db.Column(db.Boolean, default=False)
+
     tool_calls = db.relationship('ToolCall', backref='usage_record', lazy='dynamic',
                                  cascade='all, delete-orphan')
 
