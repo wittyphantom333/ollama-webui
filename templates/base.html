@@ -34,20 +34,29 @@
                         </button>
                     </li>
                     {% if current_user.is_authenticated %}
-                    <li class="nav-item">
-                        <span class="nav-link text-muted"><i class="fas fa-user me-1"></i>{{ current_user.username }}</span>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('auth.logout') }}">
-                            <i class="fas fa-sign-out-alt me-1"></i> Logout
+                    <li class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                            <i class="fas fa-user me-1"></i>{{ current_user.username }}
                         </a>
+                        <ul class="dropdown-menu dropdown-menu-end">
+                            <li><a class="dropdown-item" href="{{ url_for('api.profile') }}"><i class="fas fa-id-card me-2"></i>Profile</a></li>
+                            <li><a class="dropdown-item" href="{{ url_for('api.profile') }}#password"><i class="fas fa-lock me-2"></i>Change Password</a></li>
+                            <li><a class="dropdown-item" href="{{ url_for('api.keys') }}"><i class="fas fa-key me-2"></i>API Keys</a></li>
+                            <li><a class="dropdown-item" href="{{ url_for('api.usage') }}"><i class="fas fa-chart-bar me-2"></i>My Usage</a></li>
+                            <li><hr class="dropdown-divider"></li>
+                            <li><a class="dropdown-item" href="/help"><i class="fas fa-question-circle me-2"></i>Help & Documentation</a></li>
+                            <li><a class="dropdown-item" href="/about"><i class="fas fa-info-circle me-2"></i>About</a></li>
+                            <li><hr class="dropdown-divider"></li>
+                            <li><a class="dropdown-item" href="{{ url_for('auth.logout') }}"><i class="fas fa-sign-out-alt me-2"></i>Logout</a></li>
+                        </ul>
                     </li>
-                    {% endif %}
+                    {% else %}
                     <li class="nav-item">
                         <a class="nav-link {% if '/about' in request.path %}active{% endif %}" href="/about">
                             <i class="fas fa-info-circle me-1"></i> About
                         </a>
                     </li>
+                    {% endif %}
                 </ul>
             </div>
         </div>
@@ -57,10 +66,9 @@
         <div class="row g-0">
             <!-- Sidebar -->
             <div class="col-md-2 sidebar">
-                {% set sec_models = ('/models' in request.path or request.path == '/model-settings' or '/running-models' in request.path or '/pull' in request.path or '/create' in request.path or '/version' in request.path) %}
-                {% set sec_playground = ('/chat' in request.path or '/generate' in request.path) %}
-                {% set sec_account = ('/keys' in request.path or '/usage' in request.path) %}
-                {% set sec_admin = ('/admin/' in request.path) %}
+                {% set sec_models = ('/models' in request.path or request.path == '/model-settings' or '/running-models' in request.path or '/pull' in request.path or '/version' in request.path) %}
+                {% set sec_playground = ('/chat' in request.path or '/generate' in request.path or '/create' in request.path) %}
+                {% set sec_admin = ('/admin/' in request.path or '/usage' in request.path) %}
                 <div class="list-group">
                     <a href="/" class="list-group-item list-group-item-action {% if request.path == '/' %}active{% endif %}">
                         <i class="fas fa-home me-2"></i> Home
@@ -87,9 +95,6 @@
                     <a href="/pull" class="list-group-item list-group-item-action {% if '/pull' in request.path %}active{% endif %}">
                         <i class="fas fa-download me-2"></i> Pull Model
                     </a>
-                    <a href="/create" class="list-group-item list-group-item-action {% if '/create' in request.path %}active{% endif %}">
-                        <i class="fas fa-plus-circle me-2"></i> Create Model
-                    </a>
                     <a href="/version" class="list-group-item list-group-item-action {% if '/version' in request.path %}active{% endif %}">
                         <i class="fas fa-code-branch me-2"></i> Ollama Version
                     </a>
@@ -111,23 +116,8 @@
                     <a href="/generate" class="list-group-item list-group-item-action {% if '/generate' in request.path %}active{% endif %}">
                         <i class="fas fa-magic me-2"></i> Generate
                     </a>
-                    </div>
-                    </div>
-                </div>
-
-                <!-- Account -->
-                <div class="nav-section">
-                    <button class="nav-section-toggle" type="button" data-bs-toggle="collapse" data-bs-target="#nav-sec-account" data-nav-section="account" aria-expanded="{{ 'true' if sec_account else 'false' }}">
-                        <i class="fas fa-id-badge me-2"></i> Account
-                        <i class="fas fa-chevron-right nav-section-caret ms-auto"></i>
-                    </button>
-                    <div class="collapse {% if sec_account %}show{% endif %}" id="nav-sec-account">
-                    <div class="list-group">
-                    <a href="/keys" class="list-group-item list-group-item-action {% if '/keys' in request.path %}active{% endif %}">
-                        <i class="fas fa-key me-2"></i> API Keys
-                    </a>
-                    <a href="/usage" class="list-group-item list-group-item-action {% if '/usage' in request.path %}active{% endif %}">
-                        <i class="fas fa-chart-bar me-2"></i> Usage
+                    <a href="/create" class="list-group-item list-group-item-action {% if '/create' in request.path %}active{% endif %}">
+                        <i class="fas fa-plus-circle me-2"></i> Create Model
                     </a>
                     </div>
                     </div>
@@ -142,6 +132,9 @@
                     </button>
                     <div class="collapse {% if sec_admin %}show{% endif %}" id="nav-sec-admin">
                     <div class="list-group">
+                    <a href="/usage" class="list-group-item list-group-item-action {% if '/usage' in request.path %}active{% endif %}">
+                        <i class="fas fa-chart-bar me-2"></i> Usage
+                    </a>
                     <a href="/admin/users" class="list-group-item list-group-item-action {% if '/admin/users' in request.path %}active{% endif %}">
                         <i class="fas fa-users me-2"></i> Users
                     </a>
@@ -167,12 +160,6 @@
                     </div>
                 </div>
                 {% endif %}
-
-                <div class="list-group">
-                    <a href="/help" class="list-group-item list-group-item-action {% if '/help' in request.path %}active{% endif %}">
-                        <i class="fas fa-question-circle me-2"></i> Help & Documentation
-                    </a>
-                </div>
             </div>
             
             <!-- Main Content -->

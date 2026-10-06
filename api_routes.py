@@ -2246,6 +2246,47 @@ def delete_group(group_id):
 
 
 # ---------------------------------------------------------------------------
+# Account — profile settings + password change (any logged-in user, own account)
+# ---------------------------------------------------------------------------
+
+@api_bp.route('/profile', methods=['GET', 'POST'])
+@login_required
+def profile():
+    if request.method == 'POST':
+        action = request.form.get('action', '')
+
+        if action == 'update_profile':
+            email = (request.form.get('email') or '').strip()
+            if not email or '@' not in email:
+                flash('A valid email is required.', 'danger')
+            elif User.query.filter(User.email == email, User.id != current_user.id).first():
+                flash('That email is already in use by another account.', 'danger')
+            else:
+                current_user.email = email
+                db.session.commit()
+                flash('Profile updated.', 'success')
+
+        elif action == 'change_password':
+            current_password = request.form.get('current_password', '')
+            new_password = request.form.get('new_password', '')
+            confirm_password = request.form.get('confirm_password', '')
+            if not current_user.check_password(current_password):
+                flash('Current password is incorrect.', 'danger')
+            elif len(new_password) < 8:
+                flash('New password must be at least 8 characters.', 'danger')
+            elif new_password != confirm_password:
+                flash('New passwords do not match.', 'danger')
+            else:
+                current_user.set_password(new_password)
+                db.session.commit()
+                flash('Password changed.', 'success')
+
+        return redirect(url_for('api.profile'))
+
+    return render_template('profile.html')
+
+
+# ---------------------------------------------------------------------------
 # Admin — site settings + cloud providers
 # ---------------------------------------------------------------------------
 
