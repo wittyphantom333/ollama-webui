@@ -57,12 +57,29 @@
         <div class="row g-0">
             <!-- Sidebar -->
             <div class="col-md-2 sidebar">
+                {% set sec_models = ('/models' in request.path or request.path == '/model-settings' or '/running-models' in request.path or '/pull' in request.path or '/create' in request.path or '/version' in request.path) %}
+                {% set sec_playground = ('/chat' in request.path or '/generate' in request.path) %}
+                {% set sec_account = ('/keys' in request.path or '/usage' in request.path) %}
+                {% set sec_admin = ('/admin/' in request.path) %}
                 <div class="list-group">
                     <a href="/" class="list-group-item list-group-item-action {% if request.path == '/' %}active{% endif %}">
                         <i class="fas fa-home me-2"></i> Home
                     </a>
+                </div>
+
+                <!-- Models -->
+                <div class="nav-section">
+                    <button class="nav-section-toggle" type="button" data-bs-toggle="collapse" data-bs-target="#nav-sec-models" data-nav-section="models" aria-expanded="{{ 'true' if sec_models else 'false' }}">
+                        <i class="fas fa-cubes me-2"></i> Models
+                        <i class="fas fa-chevron-right nav-section-caret ms-auto"></i>
+                    </button>
+                    <div class="collapse {% if sec_models %}show{% endif %}" id="nav-sec-models">
+                    <div class="list-group">
                     <a href="/models" class="list-group-item list-group-item-action {% if '/models' in request.path and '/models/' not in request.path %}active{% endif %}">
                         <i class="fas fa-cubes me-2"></i> Models
+                    </a>
+                    <a href="/model-settings" class="list-group-item list-group-item-action {% if request.path == '/model-settings' %}active{% endif %}">
+                        <i class="fas fa-sliders-h me-2"></i> Proxy Settings
                     </a>
                     <a href="/running-models" class="list-group-item list-group-item-action {% if '/running-models' in request.path %}active{% endif %}">
                         <i class="fas fa-server me-2"></i> Running Models
@@ -73,26 +90,58 @@
                     <a href="/create" class="list-group-item list-group-item-action {% if '/create' in request.path %}active{% endif %}">
                         <i class="fas fa-plus-circle me-2"></i> Create Model
                     </a>
+                    <a href="/version" class="list-group-item list-group-item-action {% if '/version' in request.path %}active{% endif %}">
+                        <i class="fas fa-code-branch me-2"></i> Ollama Version
+                    </a>
+                    </div>
+                    </div>
+                </div>
+
+                <!-- Playground -->
+                <div class="nav-section">
+                    <button class="nav-section-toggle" type="button" data-bs-toggle="collapse" data-bs-target="#nav-sec-playground" data-nav-section="playground" aria-expanded="{{ 'true' if sec_playground else 'false' }}">
+                        <i class="fas fa-flask me-2"></i> Playground
+                        <i class="fas fa-chevron-right nav-section-caret ms-auto"></i>
+                    </button>
+                    <div class="collapse {% if sec_playground %}show{% endif %}" id="nav-sec-playground">
+                    <div class="list-group">
                     <a href="/chat" class="list-group-item list-group-item-action {% if '/chat' in request.path %}active{% endif %}">
                         <i class="fas fa-comments me-2"></i> Chat
                     </a>
                     <a href="/generate" class="list-group-item list-group-item-action {% if '/generate' in request.path %}active{% endif %}">
                         <i class="fas fa-magic me-2"></i> Generate
                     </a>
-                    <a href="/version" class="list-group-item list-group-item-action {% if '/version' in request.path %}active{% endif %}">
-                        <i class="fas fa-code-branch me-2"></i> Ollama Version
-                    </a>
-                    <a href="/help" class="list-group-item list-group-item-action {% if '/help' in request.path %}active{% endif %}">
-                        <i class="fas fa-question-circle me-2"></i> Help & Documentation
-                    </a>
-                    <hr class="my-1 mx-3">
+                    </div>
+                    </div>
+                </div>
+
+                <!-- Account -->
+                <div class="nav-section">
+                    <button class="nav-section-toggle" type="button" data-bs-toggle="collapse" data-bs-target="#nav-sec-account" data-nav-section="account" aria-expanded="{{ 'true' if sec_account else 'false' }}">
+                        <i class="fas fa-id-badge me-2"></i> Account
+                        <i class="fas fa-chevron-right nav-section-caret ms-auto"></i>
+                    </button>
+                    <div class="collapse {% if sec_account %}show{% endif %}" id="nav-sec-account">
+                    <div class="list-group">
                     <a href="/keys" class="list-group-item list-group-item-action {% if '/keys' in request.path %}active{% endif %}">
                         <i class="fas fa-key me-2"></i> API Keys
                     </a>
                     <a href="/usage" class="list-group-item list-group-item-action {% if '/usage' in request.path %}active{% endif %}">
                         <i class="fas fa-chart-bar me-2"></i> Usage
                     </a>
-                    {% if current_user.is_authenticated and current_user.is_admin %}
+                    </div>
+                    </div>
+                </div>
+
+                {% if current_user.is_authenticated and current_user.is_admin %}
+                <!-- Admin -->
+                <div class="nav-section">
+                    <button class="nav-section-toggle" type="button" data-bs-toggle="collapse" data-bs-target="#nav-sec-admin" data-nav-section="admin" aria-expanded="{{ 'true' if sec_admin else 'false' }}">
+                        <i class="fas fa-shield-halved me-2"></i> Admin
+                        <i class="fas fa-chevron-right nav-section-caret ms-auto"></i>
+                    </button>
+                    <div class="collapse {% if sec_admin %}show{% endif %}" id="nav-sec-admin">
+                    <div class="list-group">
                     <a href="/admin/users" class="list-group-item list-group-item-action {% if '/admin/users' in request.path %}active{% endif %}">
                         <i class="fas fa-users me-2"></i> Users
                     </a>
@@ -114,7 +163,15 @@
                     <a href="/admin/settings" class="list-group-item list-group-item-action {% if '/admin/settings' in request.path %}active{% endif %}">
                         <i class="fas fa-cog me-2"></i> Settings
                     </a>
-                    {% endif %}
+                    </div>
+                    </div>
+                </div>
+                {% endif %}
+
+                <div class="list-group">
+                    <a href="/help" class="list-group-item list-group-item-action {% if '/help' in request.path %}active{% endif %}">
+                        <i class="fas fa-question-circle me-2"></i> Help & Documentation
+                    </a>
                 </div>
             </div>
             
@@ -158,6 +215,33 @@
                 sidebar.classList.toggle('show');
             });
         }
+
+        // Collapsible sidebar sections: remember open/closed per section
+        // across page loads (full reloads, not an SPA). The section
+        // containing the current page is always force-opened server-side
+        // (via the {% if sec_x %}show{% endif %} class) regardless of the
+        // stored preference, so navigating to a page never hides its own nav.
+        document.querySelectorAll('.nav-section-toggle').forEach(function(btn) {
+            const name = btn.dataset.navSection;
+            const key = 'navSectionOpen:' + name;
+            const targetId = btn.getAttribute('data-bs-target');
+            const target = targetId ? document.querySelector(targetId) : null;
+            if (target && !target.classList.contains('show')) {
+                // Not force-opened by the server — honor the stored preference.
+                if (localStorage.getItem(key) === '1') {
+                    target.classList.add('show');
+                    btn.setAttribute('aria-expanded', 'true');
+                }
+            } else if (target) {
+                localStorage.setItem(key, '1');
+            }
+            target && target.addEventListener('shown.bs.collapse', function() {
+                localStorage.setItem(key, '1');
+            });
+            target && target.addEventListener('hidden.bs.collapse', function() {
+                localStorage.setItem(key, '0');
+            });
+        });
 
         // Dark mode toggle
         const toggle = document.getElementById('darkModeToggle');
