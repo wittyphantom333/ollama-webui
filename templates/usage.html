@@ -458,7 +458,11 @@ function showDetail(requestId) {
                     <div style="font-size:0.65rem;text-transform:uppercase;letter-spacing:0.05em;opacity:0.55;margin-bottom:5px;">
                         <i class="fas fa-wrench me-1" style="color:#9b59b6;"></i>Raw model output
                         <span style="opacity:0.6;text-transform:none;letter-spacing:0;">
-                            ${data.salvaged ? '— a tool call was recovered from this text' : '— model ended the turn without calling a tool despite tools being offered'}
+                            ${data.salvaged
+                                ? '— a tool call was recovered from this text'
+                                : (data.stop_reason === 'max_tokens'
+                                    ? '— model exhausted its entire output budget reasoning, without ever calling a tool'
+                                    : '— model ended the turn without calling a tool despite tools being offered')}
                         </span>
                     </div>
                     <pre style="margin:0;padding:10px 12px;background:rgba(155,89,182,0.07);border:1px solid rgba(155,89,182,0.35);border-radius:5px;max-height:280px;overflow:auto;white-space:pre-wrap;word-break:break-word;font-size:0.78rem;line-height:1.4;">${escapeHtml(data.raw_text)}</pre>
