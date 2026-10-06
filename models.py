@@ -20,7 +20,7 @@ db = SQLAlchemy()
 GROUP_CAPABILITIES = [
     ('manage_models', 'Manage models', 'Pull, create, and delete Ollama models (shared across all users)'),
     ('view_usage', 'View all usage', "See every user's usage dashboard, not just their own"),
-    ('manage_users', 'Manage users', 'Enable/disable accounts, assign groups and cloud-subagent models'),
+    ('manage_users', 'Manage users', 'Enable/disable accounts and assign groups'),
     ('manage_groups', 'Manage groups', 'Create, edit, and delete groups (including their own permissions)'),
     ('view_feedback', 'View feedback', 'Read submitted user feedback'),
     ('view_events', 'View events', 'Browse the CLI telemetry event stream'),
@@ -49,8 +49,9 @@ class User(UserMixin, db.Model):
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     # Per-user feature flags delivered to the CLI via the bootstrap endpoint
-    # (mirrored into the CLI's GrowthBook config overrides). Example:
-    #   {"vivus_cloud_subagent_model": "minimax-m3:cloud"}
+    # (mirrored into the CLI's GrowthBook config overrides). The cloud-subagent
+    # model is group-only (see Group.feature_flags) — this column is otherwise
+    # unused today, kept as general per-user override infra for future flags.
     # Empty/absent = standard user (subagents inherit the local model).
     feature_flags = db.Column(db.JSON, default=dict, nullable=False)
 

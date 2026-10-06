@@ -107,6 +107,10 @@ def _merged_feature_flags(user):
     Precedence (later wins): group.feature_flags → group.agent_models (as
     AGENT_MODELS_FLAG) → user.feature_flags (per-user overrides, incl. a
     per-user AGENT_MODELS_FLAG that merges on top of the group's per-agent map).
+
+    CLOUD_SUBAGENT_FLAG is group-only (no admin UI sets it per-user anymore) —
+    stripped from user_flags so a stale per-user value from before that change
+    can't silently keep overriding the group's setting.
     """
     flags = {}
     group = getattr(user, 'group', None) if user else None
@@ -117,6 +121,7 @@ def _merged_feature_flags(user):
             flags[AGENT_MODELS_FLAG] = dict(group.agent_models)
 
     user_flags = dict((user.feature_flags or {})) if user else {}
+    user_flags.pop(CLOUD_SUBAGENT_FLAG, None)
     # Merge a per-user agent map ON TOP of the group's (per-agent granularity).
     user_agent_models = user_flags.pop(AGENT_MODELS_FLAG, None)
     if isinstance(user_agent_models, dict):
@@ -2016,8 +2021,6 @@ def admin_users():
         'admin_users.html',
         users=users,
         groups=groups,
-        cloud_subagent_models=_cloud_model_names(),
-        cloud_subagent_flag=CLOUD_SUBAGENT_FLAG,
     )
 
 
@@ -2036,37 +2039,6 @@ def toggle_user(user_id):
     db.session.commit()
     status = 'enabled' if user.is_active_user else 'disabled'
     flash(f'User "{user.username}" {status}.', 'info')
-    return redirect(url_for('api.admin_users'))
-
-
-@api_bp.route('/admin/users/<int:user_id>/flags', methods=['POST'])
-@login_required
-def update_user_flags(user_id):
-    """Set or clear a user's per-user feature flags from the admin UI.
-
-    Currently exposes the "cloud subagents" toggle: a non-empty, known cloud
-    model enables the feature for that user; an empty/unknown value disables it
-    (subagents revert to the local model). Delivered to the CLI on next launch
-    via the bootstrap endpoint.
-    """
-    if not current_user.has_permission('manage_users'):
-        flash('Admin access required.', 'danger')
-        return redirect(url_for('index'))
-    from models import User
-    from sqlalchemy.orm.attributes import flag_modified
-    user = User.query.get_or_404(user_id)
-    cloud_model = (request.form.get('cloud_subagent_model') or '').strip()
-    flags = dict(user.feature_flags or {})
-    if cloud_model and cloud_model in _cloud_model_names():
-        flags[CLOUD_SUBAGENT_FLAG] = cloud_model
-        msg = f'Cloud subagents enabled ({cloud_model}) for "{user.username}".'
-    else:
-        flags.pop(CLOUD_SUBAGENT_FLAG, None)
-        msg = f'Cloud subagents disabled for "{user.username}".'
-    user.feature_flags = flags
-    flag_modified(user, 'feature_flags')  # ensure JSON mutation is persisted
-    db.session.commit()
-    flash(msg, 'info')
     return redirect(url_for('api.admin_users'))
 
 

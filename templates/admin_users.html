@@ -19,7 +19,6 @@
                     <th>Role</th>
                     <th>Status</th>
                     <th>Group</th>
-                    <th>Cloud subagents</th>
                     <th>Created</th>
                     <th></th>
                 </tr>
@@ -54,18 +53,6 @@
                                 {% endfor %}
                             </select>
                             <noscript><button type="submit" class="btn btn-sm btn-outline-primary">Set</button></noscript>
-                        </form>
-                    </td>
-                    <td>
-                        <form method="POST" action="{{ url_for('api.update_user_flags', user_id=user.id) }}" class="d-flex gap-1" style="min-width:240px">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            <select name="cloud_subagent_model" class="form-select form-select-sm">
-                                <option value="">Local (default)</option>
-                                {% for m in cloud_subagent_models %}
-                                <option value="{{ m }}"{% if user.feature_flags and user.feature_flags.get(cloud_subagent_flag) == m %} selected{% endif %}>{{ m }}</option>
-                                {% endfor %}
-                            </select>
-                            <button type="submit" class="btn btn-sm btn-outline-primary">Save</button>
                         </form>
                     </td>
                     <td>{{ user.created_at.strftime('%Y-%m-%d') }}</td>
