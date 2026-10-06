@@ -2,6 +2,7 @@
 {% block title %}{{ user.username }} — Usage{% endblock %}
 {% block extra_css %}
 <style>
+.filter-bar { gap: 6px; flex-wrap: wrap; }
 .stat-card .card-body { padding: 1rem; }
 .stat-card h2 { font-size: 1.6rem; margin: 0; }
 .stat-card .label { font-size: .75rem; text-transform: uppercase; letter-spacing: .05em; color: #888; }
@@ -38,6 +39,21 @@
     <a href="{{ url_for('api.usage') }}" class="btn btn-sm btn-outline-secondary me-2"><i class="fas fa-arrow-left"></i></a>
     <h2 class="mb-0"><i class="fas fa-user me-2"></i>{{ user.username }}</h2>
 </div>
+
+<!-- Date filter: presets or a custom range -->
+<form method="get" action="{{ url_for('api.user_usage', user_id=user.id) }}" class="d-flex align-items-center filter-bar mb-3">
+    <div class="btn-group btn-group-sm" role="group">
+        {% for p, lbl in [('24h','24h'),('7d','7d'),('14d','14d'),('30d','30d'),('90d','90d'),('all','All')] %}
+        <a class="btn {{ 'btn-primary' if preset == p else 'btn-outline-secondary' }}"
+           href="{{ url_for('api.user_usage', user_id=user.id, preset=p) }}">{{ lbl }}</a>
+        {% endfor %}
+    </div>
+    <span class="text-muted small ms-1">or</span>
+    <input type="date" name="start" value="{{ start_val }}" class="form-control form-control-sm" style="width:auto;">
+    <span class="text-muted">→</span>
+    <input type="date" name="end" value="{{ end_val }}" class="form-control form-control-sm" style="width:auto;">
+    <button type="submit" class="btn btn-sm btn-primary">Apply</button>
+</form>
 
 <!-- Summary -->
 <div class="row g-3 mb-4">

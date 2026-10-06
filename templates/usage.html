@@ -150,7 +150,7 @@
                 <thead><tr><th>User</th><th>Requests</th><th>Tokens</th><th>Errors</th><th>Time</th><th>Last Active</th></tr></thead>
                 <tbody>
                     {% for u in users_data %}
-                    <tr class="user-row" onclick="window.location='{{ url_for('api.user_usage', user_id=u.user_id) }}'">
+                    <tr class="user-row" onclick="window.location='{{ url_for('api.user_usage', user_id=u.user_id, **date_kwargs) }}'">
                         <td>{{ u.username }}</td>
                         <td>{{ u.requests }}</td>
                         <td>{{ "{:,}".format(u.total_tokens) }}</td>

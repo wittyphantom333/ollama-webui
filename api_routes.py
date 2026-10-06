@@ -1106,7 +1106,8 @@ _RATING_LABELS = {'good': 'Good', 'fine': 'Fine', 'bad': 'Bad', 'dismissed': 'Di
 def admin_events():
     """Browse CLI product events forwarded by the proxy (tengu_* telemetry),
     with a feedback-survey rating summary. Admin sees all; regular users see
-    only their own events."""
+    only their own events. Filterable by date range (?preset= or ?start=&end=),
+    same scheme as /admin/insights and /usage."""
     import json as _json
     from sqlalchemy import func
     from models import User
@@ -1114,8 +1115,25 @@ def admin_events():
     is_admin = current_user.is_admin
     page = request.args.get('page', 1, type=int)
     event_filter = request.args.get('event', '')
+    now = datetime.now(timezone.utc)
+    start_dt, end_dt, preset = _insights_date_range(now)
+    start_val = start_dt.strftime('%Y-%m-%d') if (start_dt and preset == 'custom') else ''
+    end_val = end_dt.strftime('%Y-%m-%d') if (end_dt and preset == 'custom') else ''
+    if preset == 'custom':
+        date_kwargs = {'start': start_val, 'end': end_val}
+    elif preset == 'all':
+        date_kwargs = {'preset': 'all'}
+    else:
+        date_kwargs = {'preset': preset}
 
-    base_q = EventRecord.query
+    def _range(q):
+        if start_dt is not None:
+            q = q.filter(EventRecord.created_at >= start_dt)
+        if end_dt is not None:
+            q = q.filter(EventRecord.created_at <= end_dt)
+        return q
+
+    base_q = _range(EventRecord.query)
     if not is_admin:
         base_q = base_q.filter(EventRecord.user_id == current_user.id)
 
@@ -1128,13 +1146,13 @@ def admin_events():
 
     # Event-name breakdown (respecting the per-user scope) for the overview +
     # filter chips.
-    counts_q = db.session.query(EventRecord.event, func.count(EventRecord.id))
+    counts_q = _range(db.session.query(EventRecord.event, func.count(EventRecord.id)))
     if not is_admin:
         counts_q = counts_q.filter(EventRecord.user_id == current_user.id)
     counts = counts_q.group_by(EventRecord.event).order_by(func.count(EventRecord.id).desc()).all()
     total_events = sum(c for _, c in counts)
 
-    runs_q = db.session.query(func.count(func.distinct(EventRecord.run_id)))
+    runs_q = _range(db.session.query(func.count(func.distinct(EventRecord.run_id))))
     if not is_admin:
         runs_q = runs_q.filter(EventRecord.user_id == current_user.id)
     distinct_runs = runs_q.scalar() or 0
@@ -1142,8 +1160,8 @@ def admin_events():
     # Feedback-survey rating tally: response lives in the metadata of the
     # 'responded' events (event_type == 'responded').
     ratings = {'good': 0, 'fine': 0, 'bad': 0, 'dismissed': 0}
-    survey_q = db.session.query(EventRecord.metadata_json).filter(
-        EventRecord.event == 'tengu_feedback_survey_event')
+    survey_q = _range(db.session.query(EventRecord.metadata_json).filter(
+        EventRecord.event == 'tengu_feedback_survey_event'))
     if not is_admin:
         survey_q = survey_q.filter(EventRecord.user_id == current_user.id)
     for (meta_str,) in survey_q.all():
@@ -1191,6 +1209,7 @@ def admin_events():
         event_filter=event_filter,
         parsed=parsed,
         is_admin=is_admin,
+        preset=preset, start_val=start_val, end_val=end_val, date_kwargs=date_kwargs,
     )
 
 
@@ -1860,7 +1879,8 @@ def request_detail(request_id):
 @api_bp.route('/usage/user/<int:user_id>')
 @login_required
 def user_usage(user_id):
-    """Per-user detailed usage view. Admin or self only."""
+    """Per-user detailed usage view. Admin or self only. Filterable by date
+    range (?preset= or ?start=&end=), same scheme as /usage and /admin/insights."""
     from sqlalchemy import func, case
     from models import User
     from datetime import timedelta
@@ -1870,17 +1890,35 @@ def user_usage(user_id):
         return redirect(url_for('api.usage'))
 
     user = User.query.get_or_404(user_id)
-    base_q = UsageRecord.query.filter_by(user_id=user_id)
+    now = datetime.now(timezone.utc)
+    start_dt, end_dt, preset = _insights_date_range(now)
+    start_val = start_dt.strftime('%Y-%m-%d') if (start_dt and preset == 'custom') else ''
+    end_val = end_dt.strftime('%Y-%m-%d') if (end_dt and preset == 'custom') else ''
+    if preset == 'custom':
+        date_kwargs = {'start': start_val, 'end': end_val}
+    elif preset == 'all':
+        date_kwargs = {'preset': 'all'}
+    else:
+        date_kwargs = {'preset': preset}
+
+    def _range(q):
+        if start_dt is not None:
+            q = q.filter(UsageRecord.created_at >= start_dt)
+        if end_dt is not None:
+            q = q.filter(UsageRecord.created_at <= end_dt)
+        return q
+
+    base_q = _range(UsageRecord.query.filter_by(user_id=user_id))
 
     # Summary
-    totals = db.session.query(
+    totals = _range(db.session.query(
         func.count(UsageRecord.id).label('requests'),
         func.coalesce(func.sum(UsageRecord.total_tokens), 0).label('total'),
         func.coalesce(func.sum(case((UsageRecord.error != None, 1), else_=0)), 0).label('errors'),
         func.coalesce(func.sum(UsageRecord.duration_ms), 0).label('total_duration_ms'),
         func.min(UsageRecord.created_at).label('first_seen'),
         func.max(UsageRecord.created_at).label('last_seen'),
-    ).filter(UsageRecord.user_id == user_id).first()
+    ).filter(UsageRecord.user_id == user_id)).first()
 
     # Tool usage
     all_records = base_q.filter(UsageRecord.tool_names != None).all()
@@ -1930,6 +1968,7 @@ def user_usage(user_id):
     return render_template('user_usage.html',
         user=user, totals=totals, tool_usage=tool_usage,
         sessions=session_summaries, recent=recent,
+        preset=preset, start_val=start_val, end_val=end_val, date_kwargs=date_kwargs,
     )
 
 

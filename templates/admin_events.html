@@ -2,6 +2,8 @@
 {% block title %}Events — Vivus Admin{% endblock %}
 {% block extra_css %}
 <style>
+  .filter-bar { gap: 6px; flex-wrap: wrap; }
+
   /* Explicit colors so everything stays readable in BOTH themes. Bootstrap's
      table cell color (--bs-table-color) otherwise bleeds dark text onto the
      dark page; these override it for this view. */
@@ -68,11 +70,27 @@
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h2 class="mb-0"><i class="fas fa-wave-square me-2"></i>CLI Events</h2>
     {% if event_filter %}
-    <a href="{{ url_for('api.admin_events') }}" class="btn btn-sm btn-outline-secondary">
+    <a href="{{ url_for('api.admin_events', **date_kwargs) }}" class="btn btn-sm btn-outline-secondary">
         <i class="fas fa-times me-1"></i>Clear filter: <code class="ms-1">{{ event_filter }}</code>
     </a>
     {% endif %}
 </div>
+
+<!-- Date filter: presets or a custom range -->
+<form method="get" action="{{ url_for('api.admin_events') }}" class="d-flex align-items-center filter-bar mb-3">
+    {% if event_filter %}<input type="hidden" name="event" value="{{ event_filter }}">{% endif %}
+    <div class="btn-group btn-group-sm" role="group">
+        {% for p, lbl in [('24h','24h'),('7d','7d'),('14d','14d'),('30d','30d'),('90d','90d'),('all','All')] %}
+        <a class="btn {{ 'btn-primary' if preset == p else 'btn-outline-secondary' }}"
+           href="{{ url_for('api.admin_events', preset=p) }}{{ ('&event=' ~ event_filter) if event_filter else '' }}">{{ lbl }}</a>
+        {% endfor %}
+    </div>
+    <span class="text-muted small ms-1">or</span>
+    <input type="date" name="start" value="{{ start_val }}" class="form-control form-control-sm" style="width:auto;">
+    <span class="text-muted">→</span>
+    <input type="date" name="end" value="{{ end_val }}" class="form-control form-control-sm" style="width:auto;">
+    <button type="submit" class="btn btn-sm btn-primary">Apply</button>
+</form>
 
 <!-- Summary cards -->
 <div class="row g-3 mb-3">
@@ -96,7 +114,7 @@
     </div>
     <div class="col-6 col-md-3">
         <!-- Clickable: jumps to the survey-event filter -->
-        <a class="stat-card" href="{{ url_for('api.admin_events', event='tengu_feedback_survey_event') }}">
+        <a class="stat-card" href="{{ url_for('api.admin_events', event='tengu_feedback_survey_event', **date_kwargs) }}">
         <div class="card h-100"><div class="card-body py-3">
             <div class="text-muted small text-uppercase">Survey Responses <i class="fas fa-arrow-right ms-1 small"></i></div>
             <div class="h4 mb-0">{{ survey_total }}</div>
@@ -116,7 +134,7 @@
         <div class="d-flex flex-wrap gap-2">
             {% for key in ['good', 'fine', 'bad', 'dismissed'] %}
             <a class="rating-tile d-flex align-items-baseline gap-2"
-               href="{{ url_for('api.admin_events', event='tengu_feedback_survey_event') }}">
+               href="{{ url_for('api.admin_events', event='tengu_feedback_survey_event', **date_kwargs) }}">
                 <span class="h5 mb-0 rating-{{ key }}">{{ ratings[key] }}</span>
                 <span class="text-muted">{{ rating_labels[key] }}</span>
             </a>
@@ -130,7 +148,7 @@
 {% if counts %}
 <div class="mb-3 d-flex flex-wrap gap-1">
     {% for name, cnt in counts[:24] %}
-    <a href="{{ url_for('api.admin_events', event=name) }}"
+    <a href="{{ url_for('api.admin_events', event=name, **date_kwargs) }}"
        class="badge ev-chip text-decoration-none {% if event_filter == name %}bg-primary{% else %}bg-secondary{% endif %}"
        title="{{ cnt }} events">
         {{ name }} <span class="ev-chip-count">{{ cnt }}</span>
@@ -216,7 +234,7 @@
         {% for p in pagination.iter_pages(left_edge=2, right_edge=2, left_current=2, right_current=3) %}
             {% if p %}
                 <li class="page-item{% if p == pagination.page %} active{% endif %}">
-                    <a class="page-link" href="{{ url_for('api.admin_events', page=p, event=event_filter) }}">{{ p }}</a>
+                    <a class="page-link" href="{{ url_for('api.admin_events', page=p, event=event_filter, **date_kwargs) }}">{{ p }}</a>
                 </li>
             {% else %}
                 <li class="page-item disabled"><span class="page-link">…</span></li>
