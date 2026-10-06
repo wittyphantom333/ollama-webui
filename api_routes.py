@@ -1641,25 +1641,44 @@ def admin_traces():
 @api_bp.route('/usage')
 @login_required
 def usage():
-    """Rich analytics dashboard. Admins see all users; regular users see own data."""
+    """Rich analytics dashboard. Admins see all users; regular users see own data.
+    Filterable by date range (?preset= or ?start=&end=), same scheme as /admin/insights."""
     from sqlalchemy import func, case, cast, String
     from models import User
     from datetime import timedelta
 
     is_admin = current_user.is_admin
-    base_q = UsageRecord.query
+    now = datetime.now(timezone.utc)
+    start_dt, end_dt, preset = _insights_date_range(now)
+    start_val = start_dt.strftime('%Y-%m-%d') if (start_dt and preset == 'custom') else ''
+    end_val = end_dt.strftime('%Y-%m-%d') if (end_dt and preset == 'custom') else ''
+    if preset == 'custom':
+        date_kwargs = {'start': start_val, 'end': end_val}
+    elif preset == 'all':
+        date_kwargs = {'preset': 'all'}
+    else:
+        date_kwargs = {'preset': preset}
+
+    def _range(q):
+        if start_dt is not None:
+            q = q.filter(UsageRecord.created_at >= start_dt)
+        if end_dt is not None:
+            q = q.filter(UsageRecord.created_at <= end_dt)
+        return q
+
+    base_q = _range(UsageRecord.query)
     if not is_admin:
         base_q = base_q.filter(UsageRecord.user_id == current_user.id)
 
     # --- Summary stats ---
-    totals = db.session.query(
+    totals = _range(db.session.query(
         func.count(UsageRecord.id).label('requests'),
         func.coalesce(func.sum(UsageRecord.prompt_tokens), 0).label('prompt'),
         func.coalesce(func.sum(UsageRecord.completion_tokens), 0).label('completion'),
         func.coalesce(func.sum(UsageRecord.total_tokens), 0).label('total'),
         func.coalesce(func.sum(case((UsageRecord.error != None, 1), else_=0)), 0).label('errors'),
         func.coalesce(func.sum(UsageRecord.duration_ms), 0).label('total_duration_ms'),
-    )
+    ))
     if not is_admin:
         totals = totals.filter(UsageRecord.user_id == current_user.id)
     totals = totals.first()
@@ -1667,14 +1686,14 @@ def usage():
     # --- Per-user breakdown (admin) ---
     users_data = None
     if is_admin:
-        user_stats = db.session.query(
+        user_stats = _range(db.session.query(
             UsageRecord.user_id,
             func.count(UsageRecord.id).label('requests'),
             func.coalesce(func.sum(UsageRecord.total_tokens), 0).label('total_tokens'),
             func.coalesce(func.sum(case((UsageRecord.error != None, 1), else_=0)), 0).label('errors'),
             func.coalesce(func.sum(UsageRecord.duration_ms), 0).label('total_duration_ms'),
             func.max(UsageRecord.created_at).label('last_active'),
-        ).group_by(UsageRecord.user_id).all()
+        )).group_by(UsageRecord.user_id).all()
         # Join with usernames
         user_map = {u.id: u.username for u in User.query.all()}
         users_data = [{
@@ -1690,10 +1709,10 @@ def usage():
     # --- Tool usage breakdown ---
     # Aggregate in SQL by distinct comma-separated combo, then split once per combo.
     # The base table may have ~20k matching rows, but distinct combos are typically <50.
-    tool_combo_q = db.session.query(
+    tool_combo_q = _range(db.session.query(
         UsageRecord.tool_names,
         func.count(UsageRecord.id).label('n'),
-    ).filter(UsageRecord.tool_names != None)
+    ).filter(UsageRecord.tool_names != None))
     if not is_admin:
         tool_combo_q = tool_combo_q.filter(UsageRecord.user_id == current_user.id)
     tool_combo_rows = tool_combo_q.group_by(UsageRecord.tool_names).all()
@@ -1708,59 +1727,61 @@ def usage():
     tool_usage = sorted(tool_counts.items(), key=lambda x: -x[1])
 
     # --- Stop reason distribution ---
-    stop_stats = db.session.query(
+    stop_stats = _range(db.session.query(
         UsageRecord.stop_reason,
         func.count(UsageRecord.id).label('count'),
-    )
+    ))
     if not is_admin:
         stop_stats = stop_stats.filter(UsageRecord.user_id == current_user.id)
     stop_stats = stop_stats.group_by(UsageRecord.stop_reason).all()
 
     # --- Error types ---
-    error_stats = db.session.query(
+    error_stats = _range(db.session.query(
         UsageRecord.error,
         func.count(UsageRecord.id).label('count'),
-    ).filter(UsageRecord.error != None)
+    ).filter(UsageRecord.error != None))
     if not is_admin:
         error_stats = error_stats.filter(UsageRecord.user_id == current_user.id)
     error_stats = error_stats.group_by(UsageRecord.error).order_by(func.count(UsageRecord.id).desc()).limit(10).all()
 
-    # --- Hourly activity (last 24h) ---
-    now = datetime.now(timezone.utc)
-    day_ago = now - timedelta(hours=24)
-    hourly = db.session.query(
-        func.strftime('%H', UsageRecord.created_at).label('hour'),
-        func.count(UsageRecord.id).label('count'),
-    ).filter(UsageRecord.created_at >= day_ago)
-    if not is_admin:
-        hourly = hourly.filter(UsageRecord.user_id == current_user.id)
-    hourly = hourly.group_by('hour').order_by('hour').all()
-    hourly_data = {int(h.hour): h.count for h in hourly}
-
-    # --- Daily activity (last 30 days) ---
-    month_ago = now - timedelta(days=30)
-    daily = db.session.query(
-        func.date(UsageRecord.created_at).label('day'),
+    # --- Activity over time — granularity adapts to the selected window,
+    # same scheme as /admin/insights' activity chart. Bucket label is kept
+    # under the `day` attribute name for template/JS compatibility even when
+    # the granularity is hourly or weekly.
+    if start_dt is None:
+        chart_start, span_days = now - timedelta(days=90), 90
+    else:
+        chart_start = start_dt
+        span_days = max(1, int((end_dt - start_dt).total_seconds() // 86400) + 1)
+    if span_days <= 2:
+        day_fmt = '%Y-%m-%dT%H'
+    elif span_days <= 60:
+        day_fmt = '%Y-%m-%d'
+    else:
+        day_fmt = '%Y-%W'
+    bkt_expr = func.strftime(day_fmt, UsageRecord.created_at)
+    daily = _range(db.session.query(
+        bkt_expr.label('day'),
         func.count(UsageRecord.id).label('requests'),
         func.coalesce(func.sum(UsageRecord.total_tokens), 0).label('tokens'),
         func.coalesce(func.sum(case((UsageRecord.error != None, 1), else_=0)), 0).label('errors'),
-    ).filter(UsageRecord.created_at >= month_ago)
+    ))
     if not is_admin:
         daily = daily.filter(UsageRecord.user_id == current_user.id)
-    daily = daily.group_by('day').order_by('day').all()
+    daily = daily.group_by(bkt_expr).order_by(bkt_expr).all()
 
     # --- Avg response time by model ---
-    tier_perf = db.session.query(
+    tier_perf = _range(db.session.query(
         UsageRecord.model,
         func.count(UsageRecord.id).label('count'),
         func.avg(UsageRecord.duration_ms).label('avg_ms'),
         func.avg(UsageRecord.completion_tokens).label('avg_completion'),
-    ).filter(UsageRecord.error == None)
+    ).filter(UsageRecord.error == None))
     if not is_admin:
         tier_perf = tier_perf.filter(UsageRecord.user_id == current_user.id)
     tier_perf = tier_perf.group_by(UsageRecord.model).all()
 
-    # --- Recent queries (last 100) ---
+    # --- Recent queries (within the selected range, last 100) ---
     recent = base_q.order_by(UsageRecord.created_at.desc()).limit(100).all()
 
     # Build user map for admin view (username lookup for recent requests)
@@ -1775,8 +1796,9 @@ def usage():
     return render_template('usage.html',
         totals=totals, users_data=users_data, tool_usage=tool_usage,
         stop_stats=stop_stats, error_stats=error_stats,
-        hourly_data=hourly_data, daily=daily, tier_perf=tier_perf,
+        daily=daily, tier_perf=tier_perf,
         recent=recent, is_admin=is_admin, user_map=user_map,
+        preset=preset, start_val=start_val, end_val=end_val, date_kwargs=date_kwargs,
     )
 
 
