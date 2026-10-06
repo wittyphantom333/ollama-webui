@@ -92,9 +92,11 @@
                     <a href="/running-models" class="list-group-item list-group-item-action {% if '/running-models' in request.path %}active{% endif %}">
                         <i class="fas fa-server me-2"></i> Running Models
                     </a>
+                    {% if current_user.is_authenticated and current_user.has_permission('manage_models') %}
                     <a href="/pull" class="list-group-item list-group-item-action {% if '/pull' in request.path %}active{% endif %}">
                         <i class="fas fa-download me-2"></i> Pull Model
                     </a>
+                    {% endif %}
                     <a href="/version" class="list-group-item list-group-item-action {% if '/version' in request.path %}active{% endif %}">
                         <i class="fas fa-code-branch me-2"></i> Ollama Version
                     </a>
@@ -116,14 +118,24 @@
                     <a href="/generate" class="list-group-item list-group-item-action {% if '/generate' in request.path %}active{% endif %}">
                         <i class="fas fa-magic me-2"></i> Generate
                     </a>
+                    {% if current_user.is_authenticated and current_user.has_permission('manage_models') %}
                     <a href="/create" class="list-group-item list-group-item-action {% if '/create' in request.path %}active{% endif %}">
                         <i class="fas fa-plus-circle me-2"></i> Create Model
                     </a>
+                    {% endif %}
                     </div>
                     </div>
                 </div>
 
-                {% if current_user.is_authenticated and current_user.is_admin %}
+                {% set can_view_usage = current_user.is_authenticated and current_user.has_permission('view_usage') %}
+                {% set can_manage_users = current_user.is_authenticated and current_user.has_permission('manage_users') %}
+                {% set can_manage_groups = current_user.is_authenticated and current_user.has_permission('manage_groups') %}
+                {% set can_view_feedback = current_user.is_authenticated and current_user.has_permission('view_feedback') %}
+                {% set can_view_events = current_user.is_authenticated and current_user.has_permission('view_events') %}
+                {% set can_view_insights = current_user.is_authenticated and current_user.has_permission('view_insights') %}
+                {% set can_view_traces = current_user.is_authenticated and current_user.has_permission('view_traces') %}
+                {% set can_manage_settings = current_user.is_authenticated and current_user.has_permission('manage_settings') %}
+                {% if can_view_usage or can_manage_users or can_manage_groups or can_view_feedback or can_view_events or can_view_insights or can_view_traces or can_manage_settings %}
                 <!-- Admin -->
                 <div class="nav-section">
                     <button class="nav-section-toggle" type="button" data-bs-toggle="collapse" data-bs-target="#nav-sec-admin" data-nav-section="admin" aria-expanded="{{ 'true' if sec_admin else 'false' }}">
@@ -132,30 +144,46 @@
                     </button>
                     <div class="collapse {% if sec_admin %}show{% endif %}" id="nav-sec-admin">
                     <div class="list-group">
+                    {% if can_view_usage %}
                     <a href="/usage" class="list-group-item list-group-item-action {% if '/usage' in request.path %}active{% endif %}">
                         <i class="fas fa-chart-bar me-2"></i> Usage
                     </a>
+                    {% endif %}
+                    {% if can_manage_users %}
                     <a href="/admin/users" class="list-group-item list-group-item-action {% if '/admin/users' in request.path %}active{% endif %}">
                         <i class="fas fa-users me-2"></i> Users
                     </a>
+                    {% endif %}
+                    {% if can_manage_groups %}
                     <a href="/admin/groups" class="list-group-item list-group-item-action {% if '/admin/group' in request.path %}active{% endif %}">
                         <i class="fas fa-layer-group me-2"></i> Groups
                     </a>
+                    {% endif %}
+                    {% if can_view_feedback %}
                     <a href="/admin/feedback" class="list-group-item list-group-item-action {% if '/admin/feedback' in request.path %}active{% endif %}">
                         <i class="fas fa-comment-alt me-2"></i> Feedback
                     </a>
+                    {% endif %}
+                    {% if can_view_events %}
                     <a href="/admin/events" class="list-group-item list-group-item-action {% if '/admin/events' in request.path %}active{% endif %}">
                         <i class="fas fa-wave-square me-2"></i> Events
                     </a>
+                    {% endif %}
+                    {% if can_view_insights %}
                     <a href="/admin/insights" class="list-group-item list-group-item-action {% if '/admin/insights' in request.path %}active{% endif %}">
                         <i class="fas fa-chart-line me-2"></i> Insights
                     </a>
+                    {% endif %}
+                    {% if can_view_traces %}
                     <a href="/admin/traces" class="list-group-item list-group-item-action {% if '/admin/traces' in request.path %}active{% endif %}">
                         <i class="fas fa-diagram-project me-2"></i> Traces
                     </a>
+                    {% endif %}
+                    {% if can_manage_settings %}
                     <a href="/admin/settings" class="list-group-item list-group-item-action {% if '/admin/settings' in request.path %}active{% endif %}">
                         <i class="fas fa-cog me-2"></i> Settings
                     </a>
+                    {% endif %}
                     </div>
                     </div>
                 </div>

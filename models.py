@@ -12,6 +12,31 @@ from werkzeug.security import generate_password_hash, check_password_hash
 db = SQLAlchemy()
 
 
+# Portal-access capabilities a Group can grant to its members. Keys are the
+# permission names stored in Group.permissions; is_admin users always have
+# every capability regardless of group (superadmin bypass) — this registry
+# only governs what a NON-admin, grouped user can additionally see/do beyond
+# the baseline (their own Models/Playground/Account pages).
+GROUP_CAPABILITIES = [
+    ('manage_models', 'Manage models', 'Pull, create, and delete Ollama models (shared across all users)'),
+    ('view_usage', 'View all usage', "See every user's usage dashboard, not just their own"),
+    ('manage_users', 'Manage users', 'Enable/disable accounts, assign groups and cloud-subagent models'),
+    ('manage_groups', 'Manage groups', 'Create, edit, and delete groups (including their own permissions)'),
+    ('view_feedback', 'View feedback', 'Read submitted user feedback'),
+    ('view_events', 'View events', 'Browse the CLI telemetry event stream'),
+    ('view_insights', 'View insights', 'Aggregate usage insights dashboard'),
+    ('view_traces', 'View traces', 'Request/span trace inspector'),
+    ('manage_settings', 'Manage settings', 'Registration toggle and the Ollama Cloud API token'),
+]
+GROUP_CAPABILITY_KEYS = {key for key, _label, _desc in GROUP_CAPABILITIES}
+
+# manage_models is allow-by-default (every user can already pull/create/delete
+# models today, ungated) — a group can still explicitly set it False to
+# restrict a read-only-type group. Every other capability was previously
+# is_admin-only and is deny-by-default: a group must explicitly opt in.
+_CAPABILITY_DEFAULTS = {'manage_models': True}
+
+
 class User(UserMixin, db.Model):
     __tablename__ = 'users'
 
@@ -58,6 +83,22 @@ class User(UserMixin, db.Model):
         """Stable synthetic organization UUID (single-org deployment)."""
         return str(_uuid.uuid5(_uuid.NAMESPACE_URL, 'vivus-org'))
 
+    def has_permission(self, capability):
+        """True if this user can use the given GROUP_CAPABILITIES entry.
+
+        is_admin is an unconditional superadmin bypass. Otherwise, falls back
+        to _CAPABILITY_DEFAULTS when the user has no group or the group
+        doesn't set that key explicitly — so manage_models stays available
+        by default (matching the pre-existing ungated behavior) while every
+        other (previously is_admin-only) capability stays off by default.
+        """
+        if self.is_admin:
+            return True
+        default = _CAPABILITY_DEFAULTS.get(capability, False)
+        if not self.group:
+            return default
+        return bool((self.group.permissions or {}).get(capability, default))
+
 
 class Group(db.Model):
     """A reusable configuration profile assignable to users.
@@ -80,6 +121,11 @@ class Group(db.Model):
     # {"vivus_cloud_subagent_model": "minimax-m3:cloud"}). Merged UNDER per-user
     # feature_flags so a user-level value wins.
     feature_flags = db.Column(db.JSON, default=dict, nullable=False)
+    # Portal-access permissions: { capability: bool }, keys from
+    # GROUP_CAPABILITIES. Unset/False = not granted. Separate from
+    # feature_flags because these govern the PORTAL's own access control,
+    # not anything delivered to the CLI.
+    permissions = db.Column(db.JSON, default=dict, nullable=False)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     members = db.relationship('User', backref='group', lazy='dynamic')

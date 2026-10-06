@@ -57,12 +57,14 @@
                             <a href="/generate?model={{ model.name|urlencode }}" class="btn btn-sm btn-outline-primary me-2" title="Generate with this model">
                                 <i class="fas fa-magic"></i>
                             </a>
+                            {% if current_user.has_permission('manage_models') %}
                             <form action="/models/unload/{{ model.name|urlencode }}" method="POST" class="d-inline">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                 <button type="submit" class="btn btn-sm btn-outline-danger" title="Unload this model">
                                     <i class="fas fa-eject"></i>
                                 </button>
                             </form>
+                            {% endif %}
                         </div>
                     </td>
                 </tr>

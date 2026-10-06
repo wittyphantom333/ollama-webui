@@ -18,11 +18,13 @@
                             class="form-control"
                             id="model_name"
                             name="model_name"
-                            placeholder="e.g., llama3.2, mistral:latest, qwen3-coder:480b-cloud"
+                            placeholder="e.g., llama3.2, mistral:latest, hf.co/{user}/{repo}:Q4_K_M"
                             required
                         >
                         <div class="form-text">
-                            Enter any model from the <a href="https://ollama.com/library" target="_blank" rel="noopener">Ollama library</a>, including cloud models.
+                            Enter any model from the <a href="https://ollama.com/library" target="_blank" rel="noopener">Ollama library</a>, including cloud models,
+                            or any GGUF repository on <a href="https://huggingface.co/models?library=gguf" target="_blank" rel="noopener">Hugging Face</a>
+                            as <code>hf.co/{user}/{repo}:{quantization}</code>. Pasted Hugging Face URLs are converted automatically.
                         </div>
                     </div>
                     <div class="alert alert-info">
@@ -87,6 +89,39 @@
                 <i class="fas fa-info-circle me-1"></i>
                 Cloud models require an Ollama account. Configure your token in
                 {% if current_user.is_admin %}<a href="/admin/settings">Settings</a>{% else %}Settings (admin only){% endif %}.
+            </div>
+        </div>
+
+        <!-- Hugging Face GGUF models -->
+        <div class="card mt-4">
+            <div class="card-header fw-semibold">
+                <i class="fas fa-cube me-2"></i>Hugging Face GGUF models
+                <span class="text-muted fw-normal small ms-2">Any GGUF repo on the Hub, no Modelfile needed</span>
+            </div>
+            <div class="card-body">
+                <p class="mb-2">The name is the <strong>repository</strong>, with the quantization as a tag &mdash; not the <code>.gguf</code> filename:</p>
+                <pre class="bg-light border rounded p-2 small mb-2"><code>hf.co/Orenguteng/Llama-3-8B-Lexi-Uncensored-GGUF:Q4_K_M</code></pre>
+                <p class="text-muted small mb-0">
+                    Omit the tag to get the repo's default quantization (<code>Q4_K_M</code> when present). A full filename
+                    also works as a tag. Hugging Face replies <em>&ldquo;Invalid username or password&rdquo;</em> for private,
+                    gated <strong>and</strong> misspelled repositories alike, so a 401 usually means the repo id is wrong &mdash;
+                    this page checks the Hub before starting a download and tells you which it is.
+                </p>
+            </div>
+            <div class="card-footer small">
+                <div class="fw-semibold mb-1"><i class="fas fa-lock me-1"></i>Private or gated repos</div>
+                <p class="text-muted mb-2">
+                    Ollama authenticates to the Hub with its own SSH key, not a token. Add this server's key to a Hugging Face
+                    account that can access the repo (<a href="https://huggingface.co/settings/keys" target="_blank" rel="noopener">Settings &rarr; SSH keys &rarr; Add new SSH key</a>),
+                    and accept the licence there for gated models.
+                </p>
+                {% if ollama_ssh_key %}
+                <pre class="bg-light border rounded p-2 mb-0" style="white-space: pre-wrap; word-break: break-all;"><code>{{ ollama_ssh_key }}</code></pre>
+                {% elif current_user.is_admin %}
+                <p class="text-muted mb-0">Key not readable from the portal &mdash; run <code>cat /usr/share/ollama/.ollama/id_ed25519.pub</code> on the server.</p>
+                {% else %}
+                <p class="text-muted mb-0">Ask an admin for the server's Ollama key.</p>
+                {% endif %}
             </div>
         </div>
     </div>

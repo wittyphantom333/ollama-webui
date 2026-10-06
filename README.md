@@ -5,6 +5,7 @@ A web interface for managing Ollama models and generating text using Python Flas
 ## Features
 
 - View and manage local Ollama models
+- View effective per-model proxy adjustments on the Proxy Settings page
 - Pull new models from the Ollama library
 - Create custom models with system prompts
 - Chat with Ollama models with conversation history

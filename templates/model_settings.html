@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+
+{% block title %}WebOllama - Proxy Model Settings{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-4">
+        <h1 class="mb-0">Proxy Model Settings</h1>
+        <a href="{{ url_for('models') }}" class="btn btn-outline-secondary">
+            <i class="fas fa-cubes me-1"></i> Models
+        </a>
+    </div>
+
+    {% if unavailable %}
+    <div class="alert alert-warning" role="alert">Proxy model settings are unavailable right now.</div>
+    {% elif models %}
+    <div class="table-responsive">
+        <table class="table table-hover align-middle">
+            <thead class="table-light">
+                <tr>
+                    <th scope="col">Model</th>
+                    <th scope="col">Setting</th>
+                    <th scope="col">Effective value</th>
+                    <th scope="col">Source</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for model in models %}
+                    {% for setting in model.settings %}
+                    <tr>
+                        {% if loop.first %}
+                        <th scope="row" rowspan="{{ model.settings|length }}" class="text-nowrap">
+                            <a href="/models/{{ model.name|urlencode }}">{{ model.name }}</a>
+                        </th>
+                        {% endif %}
+                        <td>{{ setting.label }}</td>
+                        <td>{{ setting.value }}</td>
+                        <td class="text-muted small">{{ setting.source }}</td>
+                    </tr>
+                    {% endfor %}
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="alert alert-info" role="status">No per-model proxy settings are active.</div>
+    {% endif %}
+</div>
+{% endblock %}

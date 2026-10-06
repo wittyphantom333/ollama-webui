@@ -69,6 +69,31 @@
         </div>
     </div>
 
+    {% if current_user.is_admin %}
+    <div class="card mb-3">
+        <div class="card-header"><i class="fas fa-shield-halved me-2"></i>Portal permissions</div>
+        <div class="card-body">
+            <p class="text-muted small mb-2">
+                What members of this group can see/do in the portal itself (separate from the CLI config
+                above). Superadmins always have full access regardless of group.
+            </p>
+            <div class="row g-2">
+                {% for cap_key, label, desc in group_capabilities %}
+                <div class="col-md-6">
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="perm_{{ cap_key }}" name="perm__{{ cap_key }}"
+                               {% if group.permissions and group.permissions.get(cap_key, cap_key == 'manage_models') %}checked{% endif %}>
+                        <label class="form-check-label small" for="perm_{{ cap_key }}">
+                            {{ label }}<br><span class="text-muted" style="font-size:0.75rem">{{ desc }}</span>
+                        </label>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
     <div class="d-flex justify-content-between align-items-center">
         <span class="text-muted small">
             <i class="fas fa-users me-1"></i>{{ group.member_count }} member{{ 's' if group.member_count != 1 else '' }}

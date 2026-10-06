@@ -15,7 +15,7 @@ from flask_login import login_required, current_user
 from models import (
     db, ApiKey, UsageRecord, SiteSettings, CloudProvider, ToolCall,
     OAuthAuthCode, OAuthToken, OAUTH_ALLOWED_CLIENT_IDS, OAUTH_GRANTED_SCOPE, Feedback,
-    EventRecord, TraceSpan, TraceLog, Group, User,
+    EventRecord, TraceSpan, TraceLog, Group, User, GROUP_CAPABILITIES,
 )
 
 api_bp = Blueprint('api', __name__, template_folder='templates')
@@ -1098,7 +1098,7 @@ def _parse_feedback_payload(payload_str):
 @api_bp.route('/admin/feedback')
 @login_required
 def admin_feedback():
-    if not current_user.is_admin:
+    if not current_user.has_permission('view_feedback'):
         flash('Admin only.', 'danger')
         return redirect(url_for('api.usage'))
     from models import User
@@ -1139,7 +1139,7 @@ def admin_events():
     from sqlalchemy import func
     from models import User
 
-    is_admin = current_user.is_admin
+    is_admin = current_user.has_permission('view_events')
     page = request.args.get('page', 1, type=int)
     event_filter = request.args.get('event', '')
     now = datetime.now(timezone.utc)
@@ -1285,7 +1285,7 @@ def admin_insights():
     from datetime import timedelta
     from sqlalchemy import func
 
-    is_admin = current_user.is_admin
+    is_admin = current_user.has_permission('view_insights')
     now = datetime.now(timezone.utc)
     start_dt, end_dt, preset = _insights_date_range(now)
     start_val = start_dt.strftime('%Y-%m-%d') if (start_dt and preset == 'custom') else ''
@@ -1493,7 +1493,7 @@ def admin_insights_detail():
     run + client. Honors the same date/user filters as the insights page."""
     import json as _json
 
-    is_admin = current_user.is_admin
+    is_admin = current_user.has_permission('view_insights')
     now = datetime.now(timezone.utc)
     start_dt, end_dt, _ = _insights_date_range(now)
 
@@ -1566,7 +1566,7 @@ def admin_traces():
     import json as _json
     from sqlalchemy import func
 
-    is_admin = current_user.is_admin
+    is_admin = current_user.has_permission('view_traces')
     from models import User
     users = {u.id: u.username for u in User.query.all()}
 
@@ -1693,7 +1693,7 @@ def usage():
     from models import User
     from datetime import timedelta
 
-    is_admin = current_user.is_admin
+    is_admin = current_user.has_permission('view_usage')
     now = datetime.now(timezone.utc)
     start_dt, end_dt, preset = _insights_date_range(now)
     start_val = start_dt.strftime('%Y-%m-%d') if (start_dt and preset == 'custom') else ''
@@ -1857,7 +1857,7 @@ def request_detail(request_id):
     record = UsageRecord.query.get_or_404(request_id)
 
     # Authorization: admin can see any, regular users only their own
-    if not current_user.is_admin and record.user_id != current_user.id:
+    if not current_user.has_permission('view_usage') and record.user_id != current_user.id:
         return jsonify({'error': 'forbidden'}), 403
 
     user = UserModel.query.get(record.user_id)
@@ -1912,7 +1912,7 @@ def user_usage(user_id):
     from models import User
     from datetime import timedelta
 
-    if not current_user.is_admin and current_user.id != user_id:
+    if not current_user.has_permission('view_usage') and current_user.id != user_id:
         flash('Not authorized.', 'danger')
         return redirect(url_for('api.usage'))
 
@@ -2006,7 +2006,7 @@ def user_usage(user_id):
 @api_bp.route('/admin/users')
 @login_required
 def admin_users():
-    if not current_user.is_admin:
+    if not current_user.has_permission('manage_users'):
         flash('Admin access required.', 'danger')
         return redirect(url_for('index'))
     from models import User
@@ -2024,7 +2024,7 @@ def admin_users():
 @api_bp.route('/admin/users/<int:user_id>/toggle', methods=['POST'])
 @login_required
 def toggle_user(user_id):
-    if not current_user.is_admin:
+    if not current_user.has_permission('manage_users'):
         flash('Admin access required.', 'danger')
         return redirect(url_for('index'))
     from models import User
@@ -2049,7 +2049,7 @@ def update_user_flags(user_id):
     (subagents revert to the local model). Delivered to the CLI on next launch
     via the bootstrap endpoint.
     """
-    if not current_user.is_admin:
+    if not current_user.has_permission('manage_users'):
         flash('Admin access required.', 'danger')
         return redirect(url_for('index'))
     from models import User
@@ -2073,7 +2073,7 @@ def update_user_flags(user_id):
 @api_bp.route('/admin/users/create', methods=['POST'])
 @login_required
 def create_user():
-    if not current_user.is_admin:
+    if not current_user.has_permission('manage_users'):
         flash('Admin access required.', 'danger')
         return redirect(url_for('index'))
     from models import User
@@ -2081,7 +2081,10 @@ def create_user():
     username = request.form.get('username', '').strip()
     email = request.form.get('email', '').strip()
     password = request.form.get('password', '')
-    is_admin = 'is_admin' in request.form
+    # Granting superadmin (is_admin) is restricted to existing superadmins —
+    # a user holding only the delegated 'manage_users' capability must not be
+    # able to mint a brand-new superadmin account via this checkbox.
+    is_admin = current_user.is_admin and 'is_admin' in request.form
 
     errors = []
     if not username or len(username) < 3:
@@ -2112,7 +2115,7 @@ def create_user():
 def assign_user_group(user_id):
     """Assign (or clear) a user's group. The group's agent-model config +
     feature flags are delivered to that user's CLI on next launch."""
-    if not current_user.is_admin:
+    if not current_user.has_permission('manage_users'):
         flash('Admin access required.', 'danger')
         return redirect(url_for('index'))
     from models import User
@@ -2140,7 +2143,7 @@ def assign_user_group(user_id):
 @api_bp.route('/admin/groups')
 @login_required
 def admin_groups():
-    if not current_user.is_admin:
+    if not current_user.has_permission('manage_groups'):
         flash('Admin access required.', 'danger')
         return redirect(url_for('index'))
     groups = Group.query.order_by(Group.name.asc()).all()
@@ -2150,7 +2153,7 @@ def admin_groups():
 @api_bp.route('/admin/groups/create', methods=['POST'])
 @login_required
 def create_group():
-    if not current_user.is_admin:
+    if not current_user.has_permission('manage_groups'):
         flash('Admin access required.', 'danger')
         return redirect(url_for('index'))
     name = (request.form.get('name') or '').strip()
@@ -2171,7 +2174,7 @@ def create_group():
 @api_bp.route('/admin/groups/<int:group_id>/edit')
 @login_required
 def edit_group(group_id):
-    if not current_user.is_admin:
+    if not current_user.has_permission('manage_groups'):
         flash('Admin access required.', 'danger')
         return redirect(url_for('index'))
     group = Group.query.get_or_404(group_id)
@@ -2182,13 +2185,14 @@ def edit_group(group_id):
         available_models=_available_model_names(),
         cloud_subagent_models=_cloud_model_names(),
         cloud_subagent_flag=CLOUD_SUBAGENT_FLAG,
+        group_capabilities=GROUP_CAPABILITIES,
     )
 
 
 @api_bp.route('/admin/groups/<int:group_id>/update', methods=['POST'])
 @login_required
 def update_group(group_id):
-    if not current_user.is_admin:
+    if not current_user.has_permission('manage_groups'):
         flash('Admin access required.', 'danger')
         return redirect(url_for('index'))
     from sqlalchemy.orm.attributes import flag_modified
@@ -2223,6 +2227,25 @@ def update_group(group_id):
     group.feature_flags = flags
     flag_modified(group, 'feature_flags')
 
+    # Portal-access permissions (GROUP_CAPABILITIES). Restricted to real
+    # superadmins even though 'manage_groups' can reach this route \u2014
+    # otherwise a delegated (non-superadmin) group manager could grant their
+    # own group manage_users/manage_settings/manage_groups and escalate to a
+    # full admin. A manage_groups-only user can still edit everything else
+    # above (name, agent models, cloud-subagent default); the permission
+    # checkboxes are silently ignored for them instead of erroring, since the
+    # template only renders that section for current_user.is_admin anyway.
+    if current_user.is_admin:
+        permissions = {}
+        for cap_key, _label, _desc in GROUP_CAPABILITIES:
+            # Always store an explicit True/False (not just omitting unchecked
+            # boxes) — manage_models defaults True when a key is ABSENT (see
+            # _CAPABILITY_DEFAULTS), so an unchecked box must write False
+            # explicitly or unchecking it would silently have no effect.
+            permissions[cap_key] = bool(request.form.get(f'perm__{cap_key}'))
+        group.permissions = permissions
+        flag_modified(group, 'permissions')
+
     db.session.commit()
     flash(f'Group "{group.name}" saved.', 'success')
     return redirect(url_for('api.edit_group', group_id=group.id))
@@ -2231,7 +2254,7 @@ def update_group(group_id):
 @api_bp.route('/admin/groups/<int:group_id>/delete', methods=['POST'])
 @login_required
 def delete_group(group_id):
-    if not current_user.is_admin:
+    if not current_user.has_permission('manage_groups'):
         flash('Admin access required.', 'danger')
         return redirect(url_for('index'))
     group = Group.query.get_or_404(group_id)
@@ -2293,7 +2316,7 @@ def profile():
 @api_bp.route('/admin/settings', methods=['GET', 'POST'])
 @login_required
 def admin_settings():
-    if not current_user.is_admin:
+    if not current_user.has_permission('manage_settings'):
         flash('Admin access required.', 'danger')
         return redirect(url_for('index'))
 

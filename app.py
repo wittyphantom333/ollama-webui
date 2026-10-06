@@ -3,6 +3,7 @@ from flask_login import LoginManager, login_required, current_user
 import requests
 import json
 import os
+import re
 import time
 import hashlib
 import subprocess
@@ -133,6 +134,16 @@ with app.app_context():
             ))
             db.session.commit()
             app.logger.info('migrated: added tool_calls.result_is_error column')
+        # Group-based portal permissions (manage_users, view_usage, etc. — see
+        # GROUP_CAPABILITIES/has_permission() in models.py, which applies the
+        # manage_models-defaults-True fallback in Python, not here).
+        _grp_cols = {c['name'] for c in _sa_inspect(db.engine).get_columns('groups')}
+        if 'permissions' not in _grp_cols:
+            db.session.execute(_sa_text(
+                "ALTER TABLE groups ADD COLUMN permissions JSON NOT NULL DEFAULT '{}'"
+            ))
+            db.session.commit()
+            app.logger.info('migrated: added groups.permissions column')
     except Exception as _mig_err:  # pragma: no cover - best-effort migration
         db.session.rollback()
         app.logger.warning('schema migration check failed: %s', _mig_err)
@@ -318,6 +329,21 @@ def models():
         flash(f"Error connecting to Ollama API: {str(e)}", "danger")
         return render_template('models.html', models=[], sort_by='name', sort_order='asc')
 
+@app.route('/model-settings')
+@login_required
+def model_settings():
+    proxy_url = os.getenv('PROXY_BASE_URL', 'http://127.0.0.1:4089').rstrip('/')
+    try:
+        response = requests.get(f'{proxy_url}/v1/model-settings', timeout=OLLAMA_META_TIMEOUT)
+        response.raise_for_status()
+        models_with_settings = response.json()['models']
+        if not isinstance(models_with_settings, list):
+            raise ValueError('Invalid model settings response')
+    except (requests.RequestException, ValueError, KeyError) as exc:
+        app.logger.warning('Proxy model settings unavailable: %s', exc)
+        return render_template('model_settings.html', models=[], unavailable=True)
+    return render_template('model_settings.html', models=models_with_settings, unavailable=False)
+
 @app.route('/models/<path:model_name>')
 @login_required
 def model_detail(model_name):
@@ -330,6 +356,9 @@ def model_detail(model_name):
 @app.route('/models/delete/<path:model_name>', methods=['POST'])
 @login_required
 def delete_model(model_name):
+    if not current_user.has_permission('manage_models'):
+        flash('You do not have permission to manage models.', 'danger')
+        return redirect(url_for('models'))
     try:
         response = requests.delete(f"{OLLAMA_API_URL}/delete", headers=ollama_headers(), json={"model": model_name}, timeout=OLLAMA_DELETE_TIMEOUT)
         if response.status_code == 200:
@@ -345,6 +374,9 @@ def delete_model(model_name):
 @app.route('/models/update/<path:model_name>')
 @login_required
 def update_model(model_name):
+    if not current_user.has_permission('manage_models'):
+        flash('You do not have permission to manage models.', 'danger')
+        return redirect(url_for('models'))
     try:
         # Re-pull the model to get the latest version
         response = requests.post(f"{OLLAMA_API_URL}/pull", headers=ollama_headers(), json={"model": model_name, "stream": False}, timeout=OLLAMA_PULL_TIMEOUT)
@@ -358,11 +390,160 @@ def update_model(model_name):
         flash(f"Error connecting to Ollama API: {str(e)}", "danger")
     return redirect(url_for('models'))
 
+# ---------------------------------------------------------------------------
+# Hugging Face model references
+# ---------------------------------------------------------------------------
+# Ollama pulls any GGUF repo on the Hub as `hf.co/{owner}/{repo}:{tag}`, where
+# the tag is a quantization (Q4_K_M) or a full .gguf filename. People paste
+# browser URLs or file names instead, and the Hub answers 401 "Invalid username
+# or password" for everything it won't serve anonymously -- private, gated AND
+# simply misspelled -- so a typo reads as "this model needs a login". Normalize
+# what we can and explain the rest before starting a multi-GB download.
+HF_HOSTS = ('hf.co', 'huggingface.co')
+HF_NAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]*$')
+HF_QUANT_RE = re.compile(r'(?:^|[-_.])((?:I?Q\d[A-Za-z0-9_]*)|BF16|F16|F32)\.gguf$', re.I)
+HF_TIMEOUT = 8
+# Where Ollama keeps the identity the Hub authenticates for private pulls. The
+# systemd install runs as the `ollama` user; a user-run server uses $HOME.
+OLLAMA_PUBKEY_PATHS = (
+    '/usr/share/ollama/.ollama/id_ed25519.pub',
+    os.path.expanduser('~/.ollama/id_ed25519.pub'),
+)
+
+
+def normalize_model_ref(raw):
+    """Turn a pasted Hugging Face URL into the reference Ollama expects.
+
+    Only an explicit hf.co/huggingface.co prefix triggers a rewrite: bare
+    `owner/model` is a valid Ollama library name too, and rewriting it would
+    break ollama.com namespaced pulls.
+    """
+    ref = (raw or '').strip().strip('"\'')
+    if not ref:
+        return ''
+    ref = re.sub(r'^https?://', '', ref, flags=re.I)
+    ref = ref.split('?', 1)[0].split('#', 1)[0].rstrip('/')
+
+    host, sep, path = ref.partition('/')
+    if not sep or host.lower() not in HF_HOSTS:
+        return ref
+
+    parts = [p for p in path.split('/') if p]
+    if len(parts) < 2:
+        return ref
+    owner, repo = parts[0], parts[1]
+    repo, _, tag = repo.partition(':')
+    # .../blob/main/file.gguf and .../resolve/main/file.gguf both name a file,
+    # and the Hub accepts a full filename as the tag.
+    if len(parts) >= 5 and parts[2] in ('blob', 'resolve'):
+        tag = parts[-1]
+    return f"hf.co/{owner}/{repo}" + (f":{tag}" if tag else '')
+
+
+def _split_hf_ref(ref):
+    """(owner, repo, tag) for an hf.co reference, or None if it isn't one."""
+    host, sep, path = (ref or '').partition('/')
+    if not sep or host.lower() not in HF_HOSTS:
+        return None
+    parts = path.split('/')
+    if len(parts) != 2:
+        return None
+    owner, repo = parts
+    repo, _, tag = repo.partition(':')
+    # Keeps user input out of the URL path we build below.
+    if not HF_NAME_RE.match(owner) or not HF_NAME_RE.match(repo):
+        return None
+    return owner, repo, tag
+
+
+def hf_preflight(ref):
+    """Explain up front why a Hugging Face reference won't pull; None if it will.
+
+    Asks the Hub the same question Ollama is about to: does this manifest
+    resolve anonymously? A failure is then diagnosed against the model API so
+    the user gets "wrong quant" / "gated" / "no such repo" instead of 401.
+    """
+    split = _split_hf_ref(ref)
+    if split is None:
+        return None
+    owner, repo, tag = split
+
+    if repo.lower().endswith('.gguf'):
+        return (f"'{owner}/{repo}' is a FILE, not a repository. The quantization goes after a "
+                f"colon, e.g. hf.co/{owner}/<repo-name>:{repo}")
+
+    try:
+        manifest = requests.get(
+            f"https://huggingface.co/v2/{owner}/{repo}/manifests/{tag or 'latest'}",
+            timeout=HF_TIMEOUT,
+        )
+    except requests.RequestException:
+        return None  # Hub unreachable from here; let the real pull decide
+    if manifest.status_code == 200:
+        return None
+
+    info = None
+    try:
+        resp = requests.get(f"https://huggingface.co/api/models/{owner}/{repo}", timeout=HF_TIMEOUT)
+        if resp.status_code == 200:
+            info = resp.json()
+    except (requests.RequestException, ValueError):
+        pass
+
+    if info is None:
+        return (f"Hugging Face won't serve {owner}/{repo} anonymously (HTTP {manifest.status_code}). "
+                "It answers identically for private, gated and misspelled repos, so check the repo id "
+                "first — then see 'Private or gated repos' on the pull page.")
+
+    if info.get('gated'):
+        return (f"{owner}/{repo} is gated ({info['gated']}). Accept its licence on huggingface.co "
+                "using the account that holds this server's Ollama SSH key — see 'Private or gated "
+                "repos' on the pull page.")
+
+    ggufs = [s.get('rfilename', '') for s in info.get('siblings', [])
+             if s.get('rfilename', '').lower().endswith('.gguf')]
+    if not ggufs:
+        return (f"{owner}/{repo} has no GGUF files, so Ollama can't pull it. Look for a -GGUF "
+                "conversion of the model instead.")
+
+    quants = []
+    for name in ggufs:
+        match = HF_QUANT_RE.search(name)
+        quant = match.group(1) if match else name
+        if quant not in quants:
+            quants.append(quant)
+    # Suggest Q4_K_M when it exists: alphabetical order would otherwise point at
+    # F16, which is several times the download for no practical gain here.
+    suggestion = next((q for q in quants if q.upper() == 'Q4_K_M'), quants[0])
+    return (f"{owner}/{repo} has no '{tag or 'latest'}' build. Available: {', '.join(quants[:12])}. "
+            f"Try hf.co/{owner}/{repo}:{suggestion}")
+
+
+def ollama_public_key():
+    """Ollama's public key, which the Hub matches to an account for private pulls."""
+    for path in OLLAMA_PUBKEY_PATHS:
+        try:
+            with open(path) as handle:
+                key = handle.read().strip()
+        except OSError:
+            continue
+        if key:
+            return key
+    return None
+
+
 @app.route('/pull', methods=['GET', 'POST'])
 @login_required
 def pull_model():
+    if not current_user.has_permission('manage_models'):
+        flash('You do not have permission to manage models.', 'danger')
+        return redirect(url_for('models'))
     if request.method == 'POST':
-        model_name = request.form.get('model_name')
+        model_name = normalize_model_ref(request.form.get('model_name'))
+        problem = hf_preflight(model_name)
+        if problem:
+            flash(problem, "danger")
+            return redirect(url_for('pull_model'))
         try:
             response = requests.post(f"{OLLAMA_API_URL}/pull", headers=ollama_headers(), json={"model": model_name, "stream": False}, timeout=OLLAMA_PULL_TIMEOUT)
             if response.status_code == 200:
@@ -376,7 +557,10 @@ def pull_model():
         except Exception as e:
             flash(f"Error connecting to Ollama API: {str(e)}", "danger")
             return redirect(url_for('pull_model'))
-    return render_template('pull_model.html')
+    return render_template(
+        'pull_model.html',
+        ollama_ssh_key=ollama_public_key() if current_user.is_admin else None,
+    )
 
 
 @app.route('/pull/stream', methods=['POST'])
@@ -389,11 +573,24 @@ def pull_model_stream():
     no progress. Ollama emits {status, digest, total, completed} lines while
     downloading; this just forwards them so the client can render a bar.
     """
-    model_name = (request.form.get('model_name') or '').strip()
+    raw_name = (request.form.get('model_name') or '').strip()
+    model_name = normalize_model_ref(raw_name)
     if not model_name:
         return jsonify({'error': 'model_name is required'}), 400
 
+    if not current_user.has_permission('manage_models'):
+        return jsonify({'error': 'You do not have permission to manage models.'}), 403
+
+    # The client only surfaces errors carried inside the stream (a non-200 here
+    # renders as a bare "Request failed"), so report preflight failures as the
+    # first NDJSON line instead.
+    problem = hf_preflight(model_name)
+    if problem:
+        return Response(json.dumps({'error': problem}) + '\n', mimetype='application/x-ndjson')
+
     def generate():
+        if model_name != raw_name:
+            yield json.dumps({'status': f'Resolved to {model_name}'}) + '\n'
         try:
             with requests.post(
                 f"{OLLAMA_API_URL}/pull",
@@ -430,6 +627,9 @@ def pull_model_stream():
 @app.route('/create', methods=['GET'])
 @login_required
 def create_model_page():
+    if not current_user.has_permission('manage_models'):
+        flash('You do not have permission to manage models.', 'danger')
+        return redirect(url_for('models'))
     tags_data = cached_ollama('/tags')
     if tags_data is None:
         flash("Ollama did not respond in time. Showing an empty model list.", "warning")
@@ -442,7 +642,13 @@ def create_model():
     # For GET requests, redirect to the create model page
     if request.method == 'GET':
         return redirect(url_for('create_model_page'))
-    
+
+    if not current_user.has_permission('manage_models'):
+        if request.content_type and 'application/json' in request.content_type:
+            return jsonify({'error': 'You do not have permission to manage models.'}), 403
+        flash('You do not have permission to manage models.', 'danger')
+        return redirect(url_for('models'))
+
     # Handle POST requests
     # Handle both form data and JSON data
     if request.content_type and 'application/json' in request.content_type:
@@ -608,6 +814,9 @@ def running_models():
 @app.route('/models/unload/<path:model_name>', methods=['POST'])
 @login_required
 def unload_model(model_name):
+    if not current_user.has_permission('manage_models'):
+        flash('You do not have permission to manage models.', 'danger')
+        return redirect(url_for('models'))
     try:
         # Unload model by setting keep_alive to 0
         payload = {

@@ -111,9 +111,11 @@
                         <a href="/generate?model={{ model_name }}" class="btn btn-primary me-2">
                             <i class="fas fa-magic me-2"></i> Generate
                         </a>
+                        {% if current_user.has_permission('manage_models') %}
                         <button type="button" id="deleteModelBtn" class="btn btn-danger" data-model-name="{{ model_name }}">
                             <i class="fas fa-trash me-2"></i> Delete
                         </button>
+                        {% endif %}
                     </div>
                 </div>
                 <div class="card-body">
