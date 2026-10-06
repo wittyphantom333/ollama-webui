@@ -74,6 +74,33 @@ def _available_model_names():
     return names
 
 
+def _cloud_model_names():
+    """Installed models that are cloud-hosted rather than local weights, for
+    the "fallback cloud subagent model" dropdowns. Cloud models aren't
+    literally size 0 (Ollama reports a few hundred bytes for the manifest
+    pointer, e.g. 293-362), but that's under 1 MB vs. multi-GB for every real
+    local model — same convention the Models page's "0.0 MB" display relies
+    on (rounds to 0.0 at 1 decimal). Falls back to the curated list on
+    error/empty."""
+    import requests as _requests
+    names = []
+    try:
+        import app as _app
+        resp = _requests.get(f'{_app.OLLAMA_API_URL}/tags',
+                             headers=_app.ollama_headers(), timeout=3)
+        if resp.ok:
+            data = resp.json() or {}
+            names = sorted({
+                m.get('name') for m in data.get('models', [])
+                if m.get('name') and (m.get('size') or 0) < 1024 * 1024
+            })
+    except Exception:
+        names = []
+    if not names:
+        names = list(CLOUD_SUBAGENT_MODELS)
+    return names
+
+
 def _merged_feature_flags(user):
     """Compose the feature flags delivered to the CLI for a user.
 
@@ -1989,7 +2016,7 @@ def admin_users():
         'admin_users.html',
         users=users,
         groups=groups,
-        cloud_subagent_models=CLOUD_SUBAGENT_MODELS,
+        cloud_subagent_models=_cloud_model_names(),
         cloud_subagent_flag=CLOUD_SUBAGENT_FLAG,
     )
 
@@ -2030,7 +2057,7 @@ def update_user_flags(user_id):
     user = User.query.get_or_404(user_id)
     cloud_model = (request.form.get('cloud_subagent_model') or '').strip()
     flags = dict(user.feature_flags or {})
-    if cloud_model and cloud_model in CLOUD_SUBAGENT_MODELS:
+    if cloud_model and cloud_model in _cloud_model_names():
         flags[CLOUD_SUBAGENT_FLAG] = cloud_model
         msg = f'Cloud subagents enabled ({cloud_model}) for "{user.username}".'
     else:
@@ -2153,7 +2180,7 @@ def edit_group(group_id):
         group=group,
         agent_types=KNOWN_AGENT_TYPES,
         available_models=_available_model_names(),
-        cloud_subagent_models=CLOUD_SUBAGENT_MODELS,
+        cloud_subagent_models=_cloud_model_names(),
         cloud_subagent_flag=CLOUD_SUBAGENT_FLAG,
     )
 

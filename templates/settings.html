@@ -61,36 +61,6 @@
             <span class="ms-3 text-success small"><i class="fas fa-check-circle me-1"></i>Token configured</span>
             {% endif %}
         </form>
-
-        <hr class="my-3">
-        <p class="fw-semibold mb-2 small">Available cloud models — pull any of these to use them:</p>
-        <div class="row g-2">
-            {% set cloud_models = [
-                ('qwen3-coder:480b-cloud', 'Qwen3 Coder 480B', 'Best coding model'),
-                ('gpt-oss:120b-cloud', 'GPT-OSS 120B', 'Large general-purpose'),
-                ('gpt-oss:20b-cloud', 'GPT-OSS 20B', 'Fast general-purpose'),
-                ('deepseek-v3.1:671b-cloud', 'DeepSeek V3.1 671B', 'Flagship reasoning'),
-                ('deepseek-v4-pro:cloud', 'DeepSeek V4 Pro', 'Latest DeepSeek'),
-                ('gemma4:31b', 'Gemma 4 31B', 'Google — MTP on Mac'),
-            ] %}
-            {% for model_id, label, desc in cloud_models %}
-            <div class="col-md-4">
-                <div class="d-flex align-items-center justify-content-between border rounded px-3 py-2">
-                    <div>
-                        <div class="fw-semibold small">{{ label }}</div>
-                        <div class="text-muted" style="font-size:0.75rem">{{ desc }}</div>
-                    </div>
-                    <form method="POST" action="/pull">
-                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                        <input type="hidden" name="model_name" value="{{ model_id }}">
-                        <button type="submit" class="btn btn-sm btn-outline-primary ms-2">
-                            <i class="fas fa-download"></i>
-                        </button>
-                    </form>
-                </div>
-            </div>
-            {% endfor %}
-        </div>
     </div>
 </div>
 {% endblock %}
