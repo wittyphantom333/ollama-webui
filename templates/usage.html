@@ -54,9 +54,9 @@
 <h2 class="mb-3"><i class="fas fa-chart-line me-2"></i>Usage Analytics</h2>
 
 <!-- Date filter: presets or a custom range -->
-<form method="get" action="{{ url_for('api.usage') }}" class="d-flex align-items-center filter-bar mb-3">
+<form method="get" action="{{ url_for('api.usage') }}" class="d-flex align-items-center flex-wrap gap-1 filter-bar mb-3">
     <div class="btn-group btn-group-sm" role="group">
-        {% for p, lbl in [('24h','24h'),('7d','7d'),('14d','14d'),('30d','30d'),('90d','90d'),('all','All')] %}
+        {% for p, lbl in DATE_PRESETS %}
         <a class="btn {{ 'btn-primary' if preset == p else 'btn-outline-secondary' }}"
            href="{{ url_for('api.usage', preset=p) }}">{{ lbl }}</a>
         {% endfor %}

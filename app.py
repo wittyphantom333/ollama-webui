@@ -62,6 +62,11 @@ def localdt_filter(value, fmt='%Y-%m-%d %H:%M', placeholder='—'):
         f'{escape(value.strftime(fmt))}</time>'
     )
 
+
+# Every range picker renders from this one list (see api_routes.DATE_PRESETS).
+from api_routes import DATE_PRESETS
+app.jinja_env.globals['DATE_PRESETS'] = DATE_PRESETS
+
 # --- Request timing (logs slow routes so we can spot regressions) ---
 import logging
 _perf_log = app.logger

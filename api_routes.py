@@ -9,7 +9,7 @@ Routes used by the portal UI:
   POST /keys/<id>/revoke       — revoke a key
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from flask import Blueprint, render_template, redirect, url_for, flash, request, jsonify
 from flask_login import login_required, current_user
 from models import (
@@ -1273,19 +1273,62 @@ def _tz_offset_minutes():
         return 0
 
 
-def _local_bucket(col, fmt):
-    """strftime bucket shifted into the viewer's local day/hour."""
-    from sqlalchemy import func
+def _local_bucket(col, fmt, bin_minutes=None):
+    """strftime bucket shifted into the viewer's local day/hour.
+
+    bin_minutes groups within the hour, which SQLite has no native bucket for —
+    needed by the sub-day ranges, where per-minute is too fine to read.
+    """
+    from sqlalchemy import func, Integer
 
     off = _tz_offset_minutes()
-    return func.strftime(fmt, col, '%+d minutes' % off) if off else func.strftime(fmt, col)
+    args = (col, '%+d minutes' % off) if off else (col,)
+    if not bin_minutes or bin_minutes <= 1:
+        return func.strftime(fmt, *args)
+    minute = func.cast(func.strftime('%M', *args), Integer)
+    # cast() to floor, not // or / — SQLAlchemy's / is true division, which
+    # leaves the minute unbinned (7/5*5 == 7.0).
+    binned = func.cast(minute / bin_minutes, Integer) * bin_minutes
+    return func.strftime('%Y-%m-%dT%H:', *args).concat(func.printf('%02d', binned))
+
+
+def _chart_granularity(span_seconds):
+    """(strftime fmt, minute bin or None, walk step, label kind) for a window.
+
+    Sized so every preset lands in roughly the 24-60 bar range; the day/hour/week
+    thresholds reproduce the previous behaviour for 24h and longer.
+    """
+    mins = max(1, int(span_seconds // 60))
+    for limit, b in ((60, 1), (180, 5), (360, 10), (720, 15)):
+        if mins <= limit:
+            return '%Y-%m-%dT%H:%M', b, timedelta(minutes=b), 'minute'
+    span_days = int(mins // 1440) + 1
+    if span_days <= 2:
+        return '%Y-%m-%dT%H', None, timedelta(hours=1), 'hour'
+    if span_days <= 60:
+        return '%Y-%m-%d', None, timedelta(days=1), 'day'
+    return '%Y-%W', None, timedelta(weeks=1), 'week'
+
+
+# Date-range selector. One definition drives both the button row (app.py exposes
+# DATE_PRESETS to Jinja) and the window resolution, so the four pages that offer
+# a range picker can't drift apart.
+DATE_PRESETS = [
+    ('30m', '30m'), ('1h', '1h'), ('3h', '3h'), ('6h', '6h'), ('12h', '12h'),
+    ('24h', '24h'), ('7d', '7d'), ('14d', '14d'), ('30d', '30d'), ('90d', '90d'),
+    ('all', 'All'),
+]
+PRESET_WINDOWS = {
+    '30m': timedelta(minutes=30), '1h': timedelta(hours=1), '3h': timedelta(hours=3),
+    '6h': timedelta(hours=6), '12h': timedelta(hours=12), '24h': timedelta(days=1),
+    '7d': timedelta(days=7), '14d': timedelta(days=14), '30d': timedelta(days=30),
+    '90d': timedelta(days=90),
+}
 
 
 def _insights_date_range(now):
     """Resolve the insights date window from ?start/?end (YYYY-MM-DD) or ?preset.
     Returns (start_dt, end_dt, preset) where a None start means 'all time'."""
-    from datetime import timedelta
-
     # A picked date means local midnight-to-midnight, not UTC's.
     tz_shift = timedelta(minutes=_tz_offset_minutes())
 
@@ -1308,10 +1351,9 @@ def _insights_date_range(now):
     elif preset == 'all':
         start_dt, end_dt = None, now
     else:
-        _pd = {'24h': 1, '7d': 7, '14d': 14, '30d': 30, '90d': 90}
-        if preset not in _pd:
+        if preset not in PRESET_WINDOWS:
             preset = '14d'
-        start_dt, end_dt = now - timedelta(days=_pd[preset]), now
+        start_dt, end_dt = now - PRESET_WINDOWS[preset], now
     return start_dt, end_dt, preset
 
 
@@ -1372,30 +1414,34 @@ def admin_insights():
 
     # Activity chart — granularity adapts to the selected window.
     if start_dt is None:
-        chart_start, span_days = now - timedelta(days=90), 90
+        chart_start, span_seconds = now - timedelta(days=90), 90 * 86400
     else:
         chart_start = start_dt
-        span_days = max(1, int((end_dt - start_dt).total_seconds() // 86400) + 1)
-    if span_days <= 2:
-        fmt, step, gran = '%Y-%m-%dT%H', timedelta(hours=1), 'hour'
-    elif span_days <= 60:
-        fmt, step, gran = '%Y-%m-%d', timedelta(days=1), 'day'
-    else:
-        fmt, step, gran = '%Y-%W', timedelta(weeks=1), 'week'
-    bkt_expr = _local_bucket(EventRecord.created_at, fmt)
+        span_seconds = (end_dt - start_dt).total_seconds()
+    fmt, bin_minutes, step, gran = _chart_granularity(span_seconds)
+    bkt_expr = _local_bucket(EventRecord.created_at, fmt, bin_minutes)
     brows = _range(_scope(db.session.query(
         bkt_expr, func.count(EventRecord.id)
     ))).group_by(bkt_expr).all()
     bmap = {k: c for (k, c) in brows if k}
     activity = []
-    cur, walk_end, _guard = chart_start, (end_dt or now), 0
     tz_shift = timedelta(minutes=_tz_offset_minutes())
-    while cur <= walk_end and _guard < 240:
-        # Label and key both in local time, so they match the shifted buckets.
-        local_cur = cur + tz_shift
-        lbl = local_cur.strftime('%Hh') if gran == 'hour' else local_cur.strftime('%m-%d')
+    # Walk in local time so labels and keys match the shifted buckets.
+    local_cur = chart_start + tz_shift
+    if bin_minutes:
+        # Must start on a bin boundary or no key will ever match.
+        local_cur = local_cur.replace(minute=(local_cur.minute // bin_minutes) * bin_minutes,
+                                      second=0, microsecond=0)
+    local_end, _guard = (end_dt or now) + tz_shift, 0
+    while local_cur <= local_end and _guard < 240:
+        if gran == 'minute':
+            lbl = local_cur.strftime('%H:%M')
+        elif gran == 'hour':
+            lbl = local_cur.strftime('%Hh')
+        else:
+            lbl = local_cur.strftime('%m-%d')
         activity.append({'date': lbl, 'count': bmap.get(local_cur.strftime(fmt), 0)})
-        cur += step
+        local_cur += step
         _guard += 1
     activity_max = max((a['count'] for a in activity), default=0)
 
@@ -1840,17 +1886,11 @@ def usage():
     # under the `day` attribute name for template/JS compatibility even when
     # the granularity is hourly or weekly.
     if start_dt is None:
-        chart_start, span_days = now - timedelta(days=90), 90
+        span_seconds = 90 * 86400
     else:
-        chart_start = start_dt
-        span_days = max(1, int((end_dt - start_dt).total_seconds() // 86400) + 1)
-    if span_days <= 2:
-        day_fmt = '%Y-%m-%dT%H'
-    elif span_days <= 60:
-        day_fmt = '%Y-%m-%d'
-    else:
-        day_fmt = '%Y-%W'
-    bkt_expr = _local_bucket(UsageRecord.created_at, day_fmt)
+        span_seconds = (end_dt - start_dt).total_seconds()
+    day_fmt, bin_minutes, _step, _gran = _chart_granularity(span_seconds)
+    bkt_expr = _local_bucket(UsageRecord.created_at, day_fmt, bin_minutes)
     daily = _range(db.session.query(
         bkt_expr.label('day'),
         func.count(UsageRecord.id).label('requests'),
