@@ -1275,6 +1275,8 @@ def _tz_offset_minutes():
 
 def _local_bucket(col, fmt):
     """strftime bucket shifted into the viewer's local day/hour."""
+    from sqlalchemy import func
+
     off = _tz_offset_minutes()
     return func.strftime(fmt, col, '%+d minutes' % off) if off else func.strftime(fmt, col)
 
