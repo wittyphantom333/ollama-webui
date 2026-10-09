@@ -44,6 +44,24 @@ app.register_blueprint(oauth_bp)
 # Exempt proxy-facing API endpoints from CSRF (they use API keys)
 csrf.exempt(api_bp)
 
+
+# Timestamps are stored as UTC (models._utcnow). Render the UTC instant into a
+# <time> element and let base.html's script restate it in the browser's zone —
+# the server has no way to know the viewer's offset, and the box's own TZ is not
+# it. The server-rendered body is the UTC fallback for no-JS.
+from markupsafe import Markup, escape
+from models import utc_iso
+
+
+@app.template_filter('localdt')
+def localdt_filter(value, fmt='%Y-%m-%d %H:%M', placeholder='—'):
+    if value is None:
+        return placeholder
+    return Markup(
+        f'<time datetime="{escape(utc_iso(value))}" data-local="{escape(fmt)}">'
+        f'{escape(value.strftime(fmt))}</time>'
+    )
+
 # --- Request timing (logs slow routes so we can spot regressions) ---
 import logging
 _perf_log = app.logger

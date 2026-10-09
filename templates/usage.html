@@ -156,7 +156,7 @@
                         <td>{{ "{:,}".format(u.total_tokens) }}</td>
                         <td>{% if u.errors > 0 %}<span class="text-danger">{{ u.errors }}</span>{% else %}0{% endif %}</td>
                         <td>{{ "%.1f"|format(u.total_duration_ms / 3600000) }}h</td>
-                        <td><small>{{ u.last_active.strftime('%b %d, %H:%M') if u.last_active else '—' }}</small></td>
+                        <td><small>{{ u.last_active|localdt('%b %d, %H:%M') }}</small></td>
                     </tr>
                     {% endfor %}
                 </tbody>
@@ -179,8 +179,8 @@
         <div class="req-item {{ cls }}" style="cursor: pointer;" onclick="showDetail({{ r.id }})">
             <div class="d-flex align-items-start gap-2">
                 <div class="text-nowrap text-end" style="min-width: 50px;">
-                    <div class="meta">{{ r.created_at.strftime('%H:%M') }}</div>
-                    <div class="meta" style="font-size: .55rem;">{{ r.created_at.strftime('%b %d') }}</div>
+                    <div class="meta">{{ r.created_at|localdt('%H:%M') }}</div>
+                    <div class="meta" style="font-size: .55rem;">{{ r.created_at|localdt('%b %d') }}</div>
                 </div>
                 <div class="flex-grow-1 min-w-0">
                     <div class="q mb-1">{{ r.query_summary or '—' }}</div>

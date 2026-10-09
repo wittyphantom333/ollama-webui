@@ -182,7 +182,7 @@
                         {% if has_meta %}<i class="fas fa-chevron-right ev-caret small"></i>{% endif %}
                     </td>
                     <td class="text-muted small">{{ ev.id }}</td>
-                    <td class="text-nowrap small">{{ ev.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                    <td class="text-nowrap small">{{ ev.created_at|localdt('%Y-%m-%d %H:%M:%S') }}</td>
                     {% if is_admin %}
                     <td>
                         {% if ev.user_id and ev.user_id in users %}

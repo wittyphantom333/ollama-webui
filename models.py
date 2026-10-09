@@ -319,6 +319,12 @@ def _aware(dt):
     return dt
 
 
+def utc_iso(dt):
+    """ISO-8601 with an explicit Z, so browsers parse it as UTC rather than local."""
+    dt = _aware(dt)
+    return dt.astimezone(timezone.utc).isoformat().replace('+00:00', 'Z') if dt else ''
+
+
 def _b64url_no_pad(raw):
     return base64.urlsafe_b64encode(raw).decode().rstrip('=')
 

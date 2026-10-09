@@ -143,7 +143,7 @@
             <td class="text-end">{{ '{:,}'.format(u.sessions) }}</td>
             <td class="text-end">{{ '${:.2f}'.format(u.cost) if u.cost else '—' }}</td>
             <td class="text-end"><span class="text-success">+{{ u.added }}</span>/<span class="text-danger">−{{ u.removed }}</span></td>
-            <td class="text-end text-muted small">{{ u.last.strftime('%Y-%m-%d %H:%M') if u.last else '—' }}</td>
+            <td class="text-end text-muted small">{{ u.last|localdt('%Y-%m-%d %H:%M') }}</td>
         </tr>
         {% endfor %}
         </tbody>
@@ -233,10 +233,12 @@ function drill(type, value) {
       if (!d.rows || !d.rows.length) { tb.innerHTML = '<tr><td colspan="5" class="text-muted">No matching events in this window.</td></tr>'; return; }
       document.getElementById('drillTitle').textContent += '  ·  ' + d.count + ' event' + (d.count === 1 ? '' : 's');
       tb.innerHTML = d.rows.map(r =>
-        '<tr><td>' + esc(r.user) + '</td><td class="mono">' + esc(r.ts) + '</td>' +
+        '<tr><td>' + esc(r.user) + '</td>' +
+        '<td class="mono"><time data-local="%Y-%m-%d %H:%M" datetime="' + esc(r.ts) + '"></time></td>' +
         '<td class="mono">' + esc(r.run_id) + '</td><td>' + esc(r.client) + '</td>' +
         '<td class="mono">' + esc(r.value) + '</td></tr>'
       ).join('');
+      window.localizeTimes(tb);
     })
     .catch(() => { loading.textContent = 'Failed to load detail.'; });
 }

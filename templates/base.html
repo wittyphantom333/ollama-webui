@@ -14,6 +14,17 @@
         document.documentElement.setAttribute('data-theme', saved);
     })();
     </script>
+    <script>
+    // Chart buckets and the date pickers are resolved server-side, so the
+    // viewer's UTC offset has to travel with the request. Set it early; the
+    // server falls back to UTC until the first request carries this cookie.
+    (function () {
+        var off = -(new Date().getTimezoneOffset());
+        if (document.cookie.indexOf('tz_offset=' + off) === -1) {
+            document.cookie = 'tz_offset=' + off + ';path=/;max-age=31536000;samesite=Lax';
+        }
+    })();
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
     <meta name="csrf-token" content="{{ csrf_token() }}">
     <title>{% block title %}Vivus Portal{% endblock %}</title>
@@ -289,6 +300,58 @@
             });
         }
     });
+    </script>
+
+    <script>
+    // Timestamps arrive as UTC in <time datetime="...Z" data-local="<strftime>">
+    // because the server cannot know the viewer's zone (and the host's own TZ is
+    // not it). Restate them in local time, reusing the original strftime pattern
+    // so column widths and layout stay exactly as rendered.
+    (function () {
+        const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                        'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const pad = n => String(n).padStart(2, '0');
+
+        function fmtLocal(d, fmt) {
+            return fmt.replace(/%[YmdHMSb%]/g, function (token) {
+                switch (token) {
+                    case '%Y': return d.getFullYear();
+                    case '%m': return pad(d.getMonth() + 1);
+                    case '%d': return pad(d.getDate());
+                    case '%H': return pad(d.getHours());
+                    case '%M': return pad(d.getMinutes());
+                    case '%S': return pad(d.getSeconds());
+                    case '%b': return MONTHS[d.getMonth()];
+                    default:   return '%';
+                }
+            });
+        }
+
+        function localizeTimes(root) {
+            const scope = (root && root.querySelectorAll) ? root : document;
+            scope.querySelectorAll('time[data-local]:not([data-localized])').forEach(function (el) {
+                const d = new Date(el.getAttribute('datetime'));
+                if (isNaN(d.getTime())) return;
+                el.textContent = fmtLocal(d, el.getAttribute('data-local') || '%Y-%m-%d %H:%M');
+                el.title = d.toLocaleString();
+                el.setAttribute('data-localized', '1');
+            });
+        }
+        window.localizeTimes = localizeTimes;
+
+        let queued = false;
+        function schedule() {
+            if (queued) return;
+            queued = true;
+            requestAnimationFrame(function () { queued = false; localizeTimes(); });
+        }
+
+        document.addEventListener('DOMContentLoaded', function () { localizeTimes(); });
+        // Several pages rebuild tables from fetch() after load; catch those too.
+        new MutationObserver(schedule).observe(document.documentElement, {
+            childList: true, subtree: true,
+        });
+    })();
     </script>
     {% block extra_js %}{% endblock %}
 </body>

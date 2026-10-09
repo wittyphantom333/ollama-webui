@@ -55,7 +55,7 @@
                             <noscript><button type="submit" class="btn btn-sm btn-outline-primary">Set</button></noscript>
                         </form>
                     </td>
-                    <td>{{ user.created_at.strftime('%Y-%m-%d') }}</td>
+                    <td>{{ user.created_at|localdt('%Y-%m-%d') }}</td>
                     <td>
                         {% if user.id != current_user.id %}
                         <form method="POST" action="{{ url_for('api.toggle_user', user_id=user.id) }}" style="display:inline">

@@ -54,7 +54,7 @@
             {% if t.prompt %}<span class="trace-prompt flex-grow-1">“{{ t.prompt }}”</span>{% endif %}
             <span class="text-muted small ms-auto text-nowrap">
                 {% if is_admin and t.user %}<span class="badge bg-secondary me-2">{{ t.user }}</span>{% endif %}
-                {% if t.start_dt %}{{ t.start_dt.strftime('%m-%d %H:%M:%S') }}{% endif %}
+                {{ t.start_dt|localdt('%m-%d %H:%M:%S', '') }}
             </span>
         </div>
     </div>

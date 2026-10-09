@@ -68,7 +68,7 @@
                 {% for fb in feedbacks %}
                 <tr>
                     <td class="text-muted small">{{ fb.id }}</td>
-                    <td class="text-nowrap small">{{ fb.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                    <td class="text-nowrap small">{{ fb.created_at|localdt('%Y-%m-%d %H:%M') }}</td>
                     <td>
                         {% if fb.user_id and fb.user_id in users %}
                             <span class="badge bg-secondary">{{ users[fb.user_id] }}</span>

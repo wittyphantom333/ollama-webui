@@ -15,7 +15,7 @@ from flask_login import login_required, current_user
 from models import (
     db, ApiKey, UsageRecord, SiteSettings, CloudProvider, ToolCall,
     OAuthAuthCode, OAuthToken, OAUTH_ALLOWED_CLIENT_IDS, OAUTH_GRANTED_SCOPE, Feedback,
-    EventRecord, TraceSpan, TraceLog, Group, User, GROUP_CAPABILITIES,
+    EventRecord, TraceSpan, TraceLog, Group, User, GROUP_CAPABILITIES, utc_iso,
 )
 
 api_bp = Blueprint('api', __name__, template_folder='templates')
@@ -1259,15 +1259,40 @@ def admin_events():
 # Portal UI — aggregate insights from CLI events
 # ---------------------------------------------------------------------------
 
+def _tz_offset_minutes():
+    """Viewer's UTC offset, from the tz_offset cookie base.html sets.
+
+    Instants are stored UTC, but day/hour buckets and the date pickers are only
+    meaningful against the viewer's own calendar — bucketing in UTC puts an
+    evening request in the US into tomorrow's bar. Defaults to UTC, which is what
+    a browser that hasn't sent the cookie yet gets.
+    """
+    try:
+        return max(-840, min(840, int(request.cookies.get('tz_offset', '0'))))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _local_bucket(col, fmt):
+    """strftime bucket shifted into the viewer's local day/hour."""
+    off = _tz_offset_minutes()
+    return func.strftime(fmt, col, '%+d minutes' % off) if off else func.strftime(fmt, col)
+
+
 def _insights_date_range(now):
     """Resolve the insights date window from ?start/?end (YYYY-MM-DD) or ?preset.
     Returns (start_dt, end_dt, preset) where a None start means 'all time'."""
     from datetime import timedelta
 
+    # A picked date means local midnight-to-midnight, not UTC's.
+    tz_shift = timedelta(minutes=_tz_offset_minutes())
+
     def _parse_d(s, end=False):
         try:
             d = datetime.strptime((s or '').strip(), '%Y-%m-%d').replace(tzinfo=timezone.utc)
-            return d.replace(hour=23, minute=59, second=59, microsecond=999999) if end else d
+            if end:
+                d = d.replace(hour=23, minute=59, second=59, microsecond=999999)
+            return d - tz_shift
         except (ValueError, TypeError):
             return None
 
@@ -1355,16 +1380,19 @@ def admin_insights():
         fmt, step, gran = '%Y-%m-%d', timedelta(days=1), 'day'
     else:
         fmt, step, gran = '%Y-%W', timedelta(weeks=1), 'week'
-    bkt_expr = func.strftime(fmt, EventRecord.created_at)
+    bkt_expr = _local_bucket(EventRecord.created_at, fmt)
     brows = _range(_scope(db.session.query(
         bkt_expr, func.count(EventRecord.id)
     ))).group_by(bkt_expr).all()
     bmap = {k: c for (k, c) in brows if k}
     activity = []
     cur, walk_end, _guard = chart_start, (end_dt or now), 0
+    tz_shift = timedelta(minutes=_tz_offset_minutes())
     while cur <= walk_end and _guard < 240:
-        lbl = cur.strftime('%Hh') if gran == 'hour' else cur.strftime('%m-%d')
-        activity.append({'date': lbl, 'count': bmap.get(cur.strftime(fmt), 0)})
+        # Label and key both in local time, so they match the shifted buckets.
+        local_cur = cur + tz_shift
+        lbl = local_cur.strftime('%Hh') if gran == 'hour' else local_cur.strftime('%m-%d')
+        activity.append({'date': lbl, 'count': bmap.get(local_cur.strftime(fmt), 0)})
         cur += step
         _guard += 1
     activity_max = max((a['count'] for a in activity), default=0)
@@ -1550,7 +1578,7 @@ def admin_insights_detail():
         rows.append({
             'user': (u.username if u else ('(anonymous)' if r.user_id is None else 'user %s' % r.user_id)),
             'user_id': r.user_id,
-            'ts': (r.created_at.strftime('%Y-%m-%d %H:%M') if r.created_at else ''),
+            'ts': utc_iso(r.created_at),
             'run_id': (r.run_id or '')[:12],
             'client': r.client or '',
             'value': v[:160],
@@ -1820,7 +1848,7 @@ def usage():
         day_fmt = '%Y-%m-%d'
     else:
         day_fmt = '%Y-%W'
-    bkt_expr = func.strftime(day_fmt, UsageRecord.created_at)
+    bkt_expr = _local_bucket(UsageRecord.created_at, day_fmt)
     daily = _range(db.session.query(
         bkt_expr.label('day'),
         func.count(UsageRecord.id).label('requests'),
@@ -1885,7 +1913,7 @@ def request_detail(request_id):
         'status': 'error' if record.error else 'success',
         'error': record.error,
         'endpoint': record.endpoint,
-        'timestamp': record.created_at.isoformat() if record.created_at else '',
+        'timestamp': utc_iso(record.created_at),
         'prompt_tokens': record.prompt_tokens,
         'completion_tokens': record.completion_tokens,
         'total_tokens': record.total_tokens,
