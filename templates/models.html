@@ -189,6 +189,14 @@
                                         <i class="fas fa-info-circle"></i>
                                     </a>
                                     {% if current_user.has_permission('manage_models') %}
+                                    <form action="/models/load/{{ model.name|urlencode }}" method="POST" class="d-inline">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                        <input type="hidden" name="keep_alive" value="{{ DEFAULT_KEEP_ALIVE }}">
+                                        <button type="submit" class="btn btn-sm btn-outline-warning me-2" data-bs-toggle="tooltip"
+                                                title="Load into VRAM now so the first request isn't a cold start">
+                                            <i class="fas fa-bolt"></i>
+                                        </button>
+                                    </form>
                                     <a href="/models/update/{{ model.name|urlencode }}" class="btn btn-sm btn-outline-success me-2" data-bs-toggle="tooltip" title="Update model">
                                         <i class="fas fa-sync-alt"></i>
                                     </a>

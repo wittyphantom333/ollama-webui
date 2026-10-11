@@ -209,6 +209,7 @@ HOST = os.getenv('HOST', '127.0.0.1')
 # longest budget but still bounded so a stuck request doesn't pin a worker.
 OLLAMA_META_TIMEOUT = 3        # /version /tags /ps /show
 OLLAMA_UNLOAD_TIMEOUT = 10     # /generate with keep_alive=0
+OLLAMA_LOAD_TIMEOUT = 300      # /generate with no prompt — cold-loading a 27B off disk is slow
 OLLAMA_DELETE_TIMEOUT = 30     # /delete
 OLLAMA_INFER_TIMEOUT = 600     # /chat /generate (non-streaming)
 OLLAMA_CREATE_TIMEOUT = 600    # /create (non-streaming)
@@ -865,6 +866,50 @@ def unload_model(model_name):
         flash(f"Error connecting to Ollama API: {str(e)}", "danger")
 
     return redirect(url_for('running_models'))
+
+
+# Offered in the load/keep-alive UI. Ollama accepts seconds as a number or a Go
+# duration string; -1 keeps the model resident until something evicts it.
+KEEP_ALIVE_CHOICES = [('5m', '5 minutes'), ('30m', '30 minutes'), ('1h', '1 hour'),
+                      ('4h', '4 hours'), ('8h', '8 hours'), ('-1', 'Until unloaded')]
+DEFAULT_KEEP_ALIVE = '4h'
+app.jinja_env.globals['KEEP_ALIVE_CHOICES'] = KEEP_ALIVE_CHOICES
+app.jinja_env.globals['DEFAULT_KEEP_ALIVE'] = DEFAULT_KEEP_ALIVE
+
+
+@app.route('/models/load/<path:model_name>', methods=['POST'])
+@login_required
+def load_model(model_name):
+    if not current_user.has_permission('manage_models'):
+        flash('You do not have permission to manage models.', 'danger')
+        return redirect(url_for('models'))
+
+    keep_alive = request.form.get('keep_alive', DEFAULT_KEEP_ALIVE)
+    if keep_alive not in dict(KEEP_ALIVE_CHOICES):
+        keep_alive = DEFAULT_KEEP_ALIVE
+    try:
+        ka = int(keep_alive)        # '-1' must go as a number; durations stay strings
+    except ValueError:
+        ka = keep_alive
+
+    try:
+        # No prompt: Ollama loads the model into VRAM and returns without generating.
+        payload = {"model": model_name, "keep_alive": ka}
+        response = requests.post(f"{OLLAMA_API_URL}/generate", headers=ollama_headers(),
+                                 json=payload, timeout=OLLAMA_LOAD_TIMEOUT)
+        if response.status_code == 200:
+            label = dict(KEEP_ALIVE_CHOICES)[keep_alive]
+            flash(f"Model {model_name} loaded — staying resident for {label.lower()}. "
+                  "An agent request will reset this to the proxy's own keep-alive.", "success")
+        else:
+            flash(f"Error loading model: {response.status_code}", "danger")
+    except requests.Timeout:
+        flash("Load request timed out. The model may still be loading in the background.", "warning")
+    except Exception as e:
+        flash(f"Error connecting to Ollama API: {str(e)}", "danger")
+
+    return redirect(request.referrer or url_for('running_models'))
+
 
 @app.route('/chat')
 @login_required

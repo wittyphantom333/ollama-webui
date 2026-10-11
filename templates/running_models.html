@@ -58,6 +58,17 @@
                                 <i class="fas fa-magic"></i>
                             </a>
                             {% if current_user.has_permission('manage_models') %}
+                            <form action="/models/load/{{ model.name|urlencode }}" method="POST" class="d-inline-flex align-items-center me-2">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <select name="keep_alive" class="form-select form-select-sm" style="width:auto;" title="How long to keep this model resident">
+                                    {% for val, lbl in KEEP_ALIVE_CHOICES %}
+                                    <option value="{{ val }}" {{ 'selected' if val == DEFAULT_KEEP_ALIVE }}>{{ lbl }}</option>
+                                    {% endfor %}
+                                </select>
+                                <button type="submit" class="btn btn-sm btn-outline-warning ms-1" title="Apply this keep-alive now">
+                                    <i class="fas fa-thumbtack"></i>
+                                </button>
+                            </form>
                             <form action="/models/unload/{{ model.name|urlencode }}" method="POST" class="d-inline">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                 <button type="submit" class="btn btn-sm btn-outline-danger" title="Unload this model">
