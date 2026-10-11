@@ -52,6 +52,11 @@ KNOWN_AGENT_TYPES = [
     ('explorer', 'Explorer — filesystem search', 'deepseek-v4-flash:cloud'),
     ('reviewer', 'Reviewer — code review', 'kimi-k2.7-code:cloud'),
     ('writer', 'Writer — file creation', 'qwen3-coder-next:cloud'),
+    # Not a subagent: the auto-mode permission classifier. Blank = classify on
+    # the main loop model. It is awaited inline before each gated tool runs, so
+    # a faster model cuts real wait — but it is judging whether a command is
+    # safe to auto-approve, so a weaker one is a security tradeoff, not a free win.
+    ('auto-mode-classifier', 'Auto-mode classifier — permission safety check (blank = main model)', ''),
 ]
 
 
