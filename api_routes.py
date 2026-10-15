@@ -303,6 +303,7 @@ def ingest_metrics():
         error=data.get('error'),
         messages_sent=data.get('messages_sent', 0),
         prompt_budget_dropped=data.get('prompt_budget_dropped', 0),
+        session_id=(data.get('session_id') or None),
         salvaged=bool(data.get('salvaged')),
         salvaged_tools=salvaged_tools,
         raw_text=(raw_text or None),

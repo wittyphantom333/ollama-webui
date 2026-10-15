@@ -236,6 +236,11 @@ class UsageRecord(db.Model):
     error = db.Column(db.String(200), nullable=True)             # upstream_504, fetch error, etc.
     messages_sent = db.Column(db.Integer, default=0)             # messages sent to Ollama
     prompt_budget_dropped = db.Column(db.Integer, default=0)     # messages dropped by budget trim
+    # The CLI's own session id, forwarded by the proxy from metadata.user_id.
+    # Without it concurrent sessions (subagents, multiple windows) are
+    # indistinguishable in this table and tool_round is the only — unreliable —
+    # proxy for session identity.
+    session_id = db.Column(db.String(64), nullable=True, index=True)
 
     # Text tool-call salvage (proxy recovered a tool call the model emitted as
     # plain-text JSON instead of via the structured tool_calls channel).

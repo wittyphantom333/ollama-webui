@@ -140,6 +140,16 @@ with app.app_context():
             ))
             db.session.commit()
             app.logger.info('migrated: added usage_records.classifier_denied column')
+        if 'session_id' not in _ur_cols:
+            db.session.execute(_sa_text(
+                "ALTER TABLE usage_records ADD COLUMN session_id VARCHAR(64)"
+            ))
+            db.session.execute(_sa_text(
+                "CREATE INDEX IF NOT EXISTS ix_usage_records_session_id "
+                "ON usage_records (session_id)"
+            ))
+            db.session.commit()
+            app.logger.info('migrated: added usage_records.session_id column')
         # Tool-result correlation: the tool_use and its tool_result always
         # arrive in separate proxy requests, so the result is UPDATEd onto
         # the existing tool_calls row (found by tool_use_id) later rather
