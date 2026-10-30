@@ -2694,3 +2694,24 @@ def session_bundle_fetch(session_id):
         'session_id': session_id,
         'blob': base64.b64encode(blob).decode('ascii'),
     })
+
+
+@api_bp.route('/api/v1/model-visibility', methods=['GET'])
+def model_visibility():
+    """Models the operator has unlisted. Read by the proxy to filter /v1/models.
+
+    Localhost only: the whole point of unlisting is that these names aren't
+    advertised, so serving the list publicly would defeat it. The proxy shares
+    a host with the portal (PORTAL_URL defaults to 127.0.0.1:5050).
+    """
+    if request.remote_addr not in ('127.0.0.1', '::1', 'localhost'):
+        return jsonify({'error': 'not found'}), 404
+    raw = SiteSettings.get('unlisted_models', '[]')
+    try:
+        import json as _json
+        unlisted = _json.loads(raw)
+        if not isinstance(unlisted, list):
+            unlisted = []
+    except (ValueError, TypeError):
+        unlisted = []
+    return jsonify({'unlisted': unlisted})

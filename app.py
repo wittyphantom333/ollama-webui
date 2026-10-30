@@ -361,13 +361,13 @@ def models():
             elif sort_by == 'modified':
                 models_list.sort(key=lambda x: x.get('modified_at', ''), reverse=(sort_order == 'desc'))
             
-            return render_template('models.html', models=models_list, sort_by=sort_by, sort_order=sort_order)
+            return render_template('models.html', models=models_list, sort_by=sort_by, sort_order=sort_order, unlisted=get_unlisted_models())
         else:
             flash("Ollama did not respond in time. Showing an empty model list.", "warning")
-            return render_template('models.html', models=[], sort_by='name', sort_order='asc')
+            return render_template('models.html', models=[], sort_by='name', sort_order='asc', unlisted=set())
     except Exception as e:
         flash(f"Error connecting to Ollama API: {str(e)}", "danger")
-        return render_template('models.html', models=[], sort_by='name', sort_order='asc')
+        return render_template('models.html', models=[], sort_by='name', sort_order='asc', unlisted=set())
 
 @app.route('/model-settings')
 @login_required
@@ -392,6 +392,45 @@ def model_detail(model_name):
         flash("Ollama did not respond in time. Try again in a moment.", "warning")
         return redirect(url_for('models'))
     return render_template('model_detail.html', model=model_info, model_name=model_name)
+
+UNLISTED_MODELS_KEY = 'unlisted_models'
+
+
+def get_unlisted_models():
+    """Model names hidden from listings but still usable when named directly."""
+    from models import SiteSettings
+    raw = SiteSettings.get(UNLISTED_MODELS_KEY, '[]')
+    try:
+        value = json.loads(raw)
+        return set(value) if isinstance(value, list) else set()
+    except (ValueError, TypeError):
+        return set()
+
+
+@app.route('/models/visibility/<path:model_name>', methods=['POST'])
+@login_required
+def toggle_model_visibility(model_name):
+    """Unlist a model, or list it again.
+
+    Unlisting only removes it from advertised listings (/v1/models, the CLI
+    model picker, the integration docs). Routing is untouched, so a client
+    that names the model explicitly still gets served — this is for models
+    that shouldn't be promoted, not models that should be unavailable.
+    """
+    if not current_user.has_permission('manage_models'):
+        flash('You do not have permission to manage models.', 'danger')
+        return redirect(url_for('models'))
+    from models import SiteSettings
+    unlisted = get_unlisted_models()
+    if model_name in unlisted:
+        unlisted.discard(model_name)
+        flash(f'"{model_name}" is listed again.', 'success')
+    else:
+        unlisted.add(model_name)
+        flash(f'"{model_name}" is now unlisted — hidden from listings, still usable if called by name.', 'info')
+    SiteSettings.set(UNLISTED_MODELS_KEY, json.dumps(sorted(unlisted)))
+    return redirect(url_for('models'))
+
 
 @app.route('/models/delete/<path:model_name>', methods=['POST'])
 @login_required
