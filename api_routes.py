@@ -3,6 +3,8 @@
 Routes used by the Vivus translation proxy:
   POST /api/v1/keys/validate   — check an API key, return user info
   POST /api/v1/metrics         — ingest usage telemetry from the proxy
+  POST/GET /api/v1/sessions    — store / list CLI session bundles
+  GET  /api/v1/sessions/<id>   — fetch one session bundle
 
 Routes used by the portal UI:
   GET/POST /keys               — list / create API keys
@@ -10,12 +12,17 @@ Routes used by the portal UI:
 """
 
 from datetime import datetime, timezone, timedelta
-from flask import Blueprint, render_template, redirect, url_for, flash, request, jsonify
+import base64
+import binascii
+import os
+import re
+from flask import Blueprint, render_template, redirect, url_for, flash, request, jsonify, current_app
 from flask_login import login_required, current_user
 from models import (
     db, ApiKey, UsageRecord, SiteSettings, CloudProvider, ToolCall,
     OAuthAuthCode, OAuthToken, OAUTH_ALLOWED_CLIENT_IDS, OAUTH_GRANTED_SCOPE, Feedback,
     EventRecord, TraceSpan, TraceLog, Group, User, GROUP_CAPABILITIES, utc_iso,
+    SessionBundle,
 )
 
 api_bp = Blueprint('api', __name__, template_folder='templates')
@@ -2565,3 +2572,125 @@ def vivus_cli_profile():
     if user is None:
         return jsonify({'error': 'unauthorized'}), 401
     return jsonify(_profile_payload(user))
+
+
+# ---------------------------------------------------------------------------
+# Session bundles — backs the CLI's /cloud push|list|pull
+# ---------------------------------------------------------------------------
+# The CLI encrypts each bundle client-side (scrypt -> AES-256-GCM) before
+# upload, so what lands here is opaque bytes: never parse it, never try to
+# render it. Blobs are multi-MB, so they live on disk under
+# instance/session-bundles/<user_id>/<session_id>.bin and the table holds only
+# the metadata needed to list and locate them.
+
+# session_id is interpolated into a path, so only a literal UUID is accepted —
+# anything else could escape the per-user directory.
+_SESSION_ID_RE = re.compile(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
+
+# Matches MAX_UPLOAD_BYTES in the CLI (ts/src/services/api/sessionSyncApi.ts).
+MAX_BUNDLE_BYTES = 32 * 1024 * 1024
+
+
+def _bundle_dir(user_id):
+    return os.path.join(current_app.instance_path, 'session-bundles', str(int(user_id)))
+
+
+def _bundle_path(user_id, session_id):
+    return os.path.join(_bundle_dir(user_id), f'{session_id}.bin')
+
+
+def _session_caller():
+    """(user, error_response) — session routes require a real, enabled user."""
+    user = _user_from_request()
+    if user is None:
+        return None, (jsonify({'error': 'unauthorized'}), 401)
+    if not user.is_active_user:
+        return None, (jsonify({'error': 'user disabled'}), 403)
+    return user, None
+
+
+@api_bp.route('/api/v1/sessions', methods=['POST'])
+def session_bundle_upload():
+    user, err = _session_caller()
+    if err:
+        return err
+
+    data = request.get_json(silent=True) or {}
+    session_id = str(data.get('session_id') or '')
+    if not _SESSION_ID_RE.match(session_id):
+        return jsonify({'error': 'session_id must be a UUID'}), 400
+
+    try:
+        blob = base64.b64decode(data.get('blob') or '', validate=True)
+    except (binascii.Error, ValueError):
+        return jsonify({'error': 'blob is not valid base64'}), 400
+    if not blob:
+        return jsonify({'error': 'blob is empty'}), 400
+    if len(blob) > MAX_BUNDLE_BYTES:
+        return jsonify({'error': 'bundle too large'}), 413
+
+    directory = _bundle_dir(user.id)
+    os.makedirs(directory, exist_ok=True)
+    path = _bundle_path(user.id, session_id)
+    # Write-then-rename: a half-written bundle must never replace a good one,
+    # since the client has no way to tell a truncated blob from a corrupt key.
+    tmp = f'{path}.tmp'
+    with open(tmp, 'wb') as fh:
+        fh.write(blob)
+    os.replace(tmp, path)
+
+    now = datetime.now(timezone.utc)
+    row = SessionBundle.query.filter_by(user_id=user.id, session_id=session_id).first()
+    if row is None:
+        row = SessionBundle(user_id=user.id, session_id=session_id, created_at=now)
+        db.session.add(row)
+    row.source_host = (str(data.get('source_host') or '') or None)
+    if row.source_host:
+        row.source_host = row.source_host[:255]
+    row.size_bytes = len(blob)
+    row.updated_at = now
+    db.session.commit()
+
+    # The CLI rejects any response without session_id — that is what stops the
+    # proxy's catch-all {"ok":true} being mistaken for a successful upload.
+    return jsonify({'session_id': session_id, 'size_bytes': len(blob)})
+
+
+@api_bp.route('/api/v1/sessions', methods=['GET'])
+def session_bundle_list():
+    user, err = _session_caller()
+    if err:
+        return err
+    rows = (SessionBundle.query
+            .filter_by(user_id=user.id)
+            .order_by(SessionBundle.updated_at.desc())
+            .all())
+    return jsonify({'sessions': [{
+        'session_id': r.session_id,
+        'source_host': r.source_host,
+        'size_bytes': r.size_bytes or 0,
+        'updated_at': utc_iso(r.updated_at),
+    } for r in rows]})
+
+
+@api_bp.route('/api/v1/sessions/<session_id>', methods=['GET'])
+def session_bundle_fetch(session_id):
+    user, err = _session_caller()
+    if err:
+        return err
+    if not _SESSION_ID_RE.match(session_id or ''):
+        return jsonify({'error': 'session_id must be a UUID'}), 400
+    row = SessionBundle.query.filter_by(user_id=user.id, session_id=session_id).first()
+    if row is None:
+        return jsonify({'error': 'not found'}), 404
+    path = _bundle_path(user.id, session_id)
+    try:
+        with open(path, 'rb') as fh:
+            blob = fh.read()
+    except OSError:
+        current_app.logger.warning('session bundle row %s has no file on disk', row.id)
+        return jsonify({'error': 'not found'}), 404
+    return jsonify({
+        'session_id': session_id,
+        'blob': base64.b64encode(blob).decode('ascii'),
+    })

@@ -169,10 +169,34 @@ class ApiKey(db.Model):
         return ApiKey.query.filter_by(key_hash=hashed, is_active=True).first()
 
 
+class SessionBundle(db.Model):
+    """Metadata for a CLI session bundle saved by `/cloud push`.
+
+    The bundle itself is an opaque blob the CLI encrypted client-side, so it is
+    never parsed here and is kept on disk under instance/session-bundles/
+    rather than in the database — these run to several MB each and SQLite is
+    the wrong place for them. This row only tracks what is needed to list and
+    locate one.
+    """
+    __tablename__ = 'session_bundles'
+    __table_args__ = (
+        db.UniqueConstraint('user_id', 'session_id', name='uq_session_bundle_user_session'),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    session_id = db.Column(db.String(64), nullable=False, index=True)
+    source_host = db.Column(db.String(255), nullable=True)
+    size_bytes = db.Column(db.Integer, nullable=False, default=0)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    user = db.relationship('User', backref='session_bundles')
+
+
 class SiteSettings(db.Model):
     """Site-wide configuration stored as key/value pairs."""
     __tablename__ = 'site_settings'
-
     key = db.Column(db.String(80), primary_key=True)
     value = db.Column(db.Text, nullable=True)
 
