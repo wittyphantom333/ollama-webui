@@ -37,12 +37,15 @@ def load_user(user_id):
 from auth import auth_bp
 from api_routes import api_bp
 from oauth_routes import oauth_bp
+from mcp_server import mcp_bp
 app.register_blueprint(auth_bp)
 app.register_blueprint(api_bp)
 app.register_blueprint(oauth_bp)
+app.register_blueprint(mcp_bp)
 
 # Exempt proxy-facing API endpoints from CSRF (they use API keys)
 csrf.exempt(api_bp)
+csrf.exempt(mcp_bp)
 
 
 # Timestamps are stored as UTC (models._utcnow). Render the UTC instant into a

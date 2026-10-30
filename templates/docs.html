@@ -30,6 +30,8 @@
             <a class="list-group-item list-group-item-action" href="#captured">6. What gets captured</a>
             <a class="list-group-item list-group-item-action" href="#telemetry">7. Optional: product telemetry</a>
             <a class="list-group-item list-group-item-action" href="#errors">8. Errors &amp; limits</a>
+            <a class="list-group-item list-group-item-action" href="#mcp">9. MCP server (telemetry for agents)</a>
+            <a class="list-group-item list-group-item-action" href="#mcp">9. MCP server</a>
           </div>
         </div>
       </div>
@@ -275,6 +277,42 @@
         model's <code>max input</code> are trimmed to fit rather than rejected, and
         a cold model can take 30&ndash;90s to load before the first token. Set
         generous client timeouts — 10 minutes is reasonable for long prompts.
+      </div>
+  <!-- 9. MCP -->
+  <div class="card mb-4" id="mcp">
+    <div class="card-header"><h2 class="h5 mb-0">9. MCP server (telemetry for AI agents)</h2></div>
+    <div class="card-body">
+      <p>
+        An MCP endpoint at <code>POST {{ public_base }}/mcp</code> lets an AI
+        agent query this platform's telemetry directly. Streamable HTTP
+        transport, JSON-RPC 2.0, authenticated with the same
+        <code>x-api-key</code>.
+      </p>
+<pre class="bg-dark text-light p-3 rounded"><code>{
+  "mcpServers": {
+    "vivus": {
+      "type": "http",
+      "url": "{{ public_base }}/mcp",
+      "headers": { "x-api-key": "$VIVUS_API_KEY" }
+    }
+  }
+}</code></pre>
+      <p class="mb-2"><strong>Tools</strong> — metrics are scoped to your own account:</p>
+      <ul>
+        <li><code>usage_summary</code> — requests, tokens and errors grouped by model, user, day or session</li>
+        <li><code>recent_requests</code> — individual requests with tokens, duration, tools and errors</li>
+        <li><code>top_errors</code>, <code>session_activity</code>, <code>recent_events</code>, <code>list_models</code></li>
+      </ul>
+      <p class="mb-2"><strong>Admin keys only:</strong></p>
+      <ul>
+        <li><code>request_detail</code> — query text, model output, tool arguments, file diffs, shell commands</li>
+        <li><code>set_model_unlisted</code> — hide or re-show a model in listings</li>
+      </ul>
+      <div class="alert alert-warning mb-0">
+        Metrics tools never return prompt text, file contents or commands — that
+        split is enforced server-side, not by convention. An admin key handed to
+        an agent can read the full content of every session on the platform, so
+        treat it accordingly.
       </div>
     </div>
   </div>
