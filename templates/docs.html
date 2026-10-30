@@ -1,0 +1,282 @@
+{% extends "base.html" %}
+
+{% block title %}Vivus - API Integration{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+  <div class="mb-4">
+    <h1>API Integration Guide</h1>
+    <p class="text-muted">
+      Point your own client at Vivus models. Anything that speaks the Anthropic
+      Messages API works — only the base URL and key change.
+    </p>
+  </div>
+
+  <div class="card mb-4">
+    <div class="card-header"><h2 class="h5 mb-0">Contents</h2></div>
+    <div class="card-body">
+      <div class="row">
+        <div class="col-md-6">
+          <div class="list-group">
+            <a class="list-group-item list-group-item-action" href="#quickstart">1. Quick start</a>
+            <a class="list-group-item list-group-item-action" href="#auth">2. Authentication</a>
+            <a class="list-group-item list-group-item-action" href="#requests">3. Request format</a>
+            <a class="list-group-item list-group-item-action" href="#sessions">4. Session attribution</a>
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="list-group">
+            <a class="list-group-item list-group-item-action" href="#models">5. Models &amp; context limits</a>
+            <a class="list-group-item list-group-item-action" href="#captured">6. What gets captured</a>
+            <a class="list-group-item list-group-item-action" href="#telemetry">7. Optional: product telemetry</a>
+            <a class="list-group-item list-group-item-action" href="#errors">8. Errors &amp; limits</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 1. QUICK START -->
+  <div class="card mb-4" id="quickstart">
+    <div class="card-header"><h2 class="h5 mb-0">1. Quick start</h2></div>
+    <div class="card-body">
+      <p>Three things change versus talking to Anthropic directly:</p>
+      <ul>
+        <li><strong>Base URL</strong> — <code>{{ public_base }}</code></li>
+        <li><strong>Key</strong> — a Vivus key from <a href="/keys">API Keys</a>, not an Anthropic key</li>
+        <li><strong>Model</strong> — a Vivus model name (see <a href="#models">below</a>)</li>
+      </ul>
+<pre class="bg-dark text-light p-3 rounded"><code>curl {{ public_base }}/v1/messages \
+  -H "content-type: application/json" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "x-api-key: $VIVUS_API_KEY" \
+  -d '{
+    "model": "{{ models[0].id if models else 'qwen3.8:27b' }}",
+    "max_tokens": 1024,
+    "messages": [{"role": "user", "content": "Say hello"}]
+  }'</code></pre>
+      <p class="mb-0">
+        The response is Anthropic Messages format, so existing SDKs work by
+        overriding the base URL — e.g. <code>new Anthropic({ baseURL, apiKey })</code>
+        or <code>Anthropic(base_url=..., api_key=...)</code>.
+      </p>
+    </div>
+  </div>
+
+  <!-- 2. AUTH -->
+  <div class="card mb-4" id="auth">
+    <div class="card-header"><h2 class="h5 mb-0">2. Authentication</h2></div>
+    <div class="card-body">
+      <p>
+        Send the key as <code>x-api-key</code>. Keys are issued per user on the
+        <a href="/keys">API Keys</a> page and look like
+        <code>sk-vivus-&lt;48 hex chars&gt;</code>. The raw key is shown once at
+        creation; only a hash is stored.
+      </p>
+      <p>
+        <strong>Every request is attributed to the account behind the key.</strong>
+        That is what ties usage, cost and tool activity back to a team — there is
+        no separate tenant identifier to send.
+      </p>
+      <div class="alert alert-warning mb-0">
+        Issue a <strong>separate key per integration</strong>. Usage is grouped by
+        user, so a shared key makes two systems indistinguishable in reporting,
+        and revoking one revokes both.
+      </div>
+    </div>
+  </div>
+
+  <!-- 3. REQUESTS -->
+  <div class="card mb-4" id="requests">
+    <div class="card-header"><h2 class="h5 mb-0">3. Request format</h2></div>
+    <div class="card-body">
+      <p>
+        <code>POST /v1/messages</code> — the Anthropic Messages API, streaming and
+        non-streaming. <code>messages</code>, <code>system</code>,
+        <code>tools</code>, <code>tool_choice</code>, <code>max_tokens</code>,
+        <code>temperature</code> and <code>stream</code> all behave as documented
+        by Anthropic.
+      </p>
+      <p>Also available:</p>
+      <ul class="mb-0">
+        <li><code>GET /v1/models</code> — live model list with context limits</li>
+        <li><code>POST /v1/messages/count_tokens</code> — token counting</li>
+        <li><code>GET /health</code> — liveness</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- 4. SESSIONS -->
+  <div class="card mb-4 border-primary" id="sessions">
+    <div class="card-header bg-primary text-white"><h2 class="h5 mb-0">4. Session attribution &mdash; read this one</h2></div>
+    <div class="card-body">
+      <p>
+        Usage rows are grouped into conversations by a <strong>session id you
+        supply</strong>. Without it every request is an orphan: totals still bill
+        correctly, but nothing can be grouped into a conversation, and concurrent
+        clients interleave indistinguishably.
+      </p>
+      <p>
+        It rides in the standard Anthropic <code>metadata.user_id</code> field,
+        which must be a <strong>JSON string</strong> containing a
+        <code>session_id</code>:
+      </p>
+<pre class="bg-dark text-light p-3 rounded"><code>{
+  "model": "...",
+  "max_tokens": 1024,
+  "messages": [ ... ],
+  "metadata": {
+    "user_id": "{\"session_id\":\"550e8400-e29b-41d4-a716-446655440000\"}"
+  }
+}</code></pre>
+      <p class="mb-0">
+        Generate one id per conversation and reuse it for every turn, including
+        tool-result turns. Any stable string works; a UUID is conventional.
+      </p>
+    </div>
+  </div>
+
+  <!-- 5. MODELS -->
+  <div class="card mb-4" id="models">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <h2 class="h5 mb-0">5. Models &amp; context limits</h2>
+      <span class="badge bg-secondary">live from the proxy</span>
+    </div>
+    <div class="card-body">
+      {% if models %}
+      <p>
+        <code>max input</code> is the limit actually enforced for a request today.
+        It can sit below the model's native window when VRAM is tight, and it
+        moves as the proxy measures real usage — always read
+        <code>GET /v1/models</code> rather than hardcoding these.
+      </p>
+      <div class="table-responsive">
+        <table class="table table-sm table-striped align-middle">
+          <thead>
+            <tr>
+              <th>Model</th>
+              <th class="text-end">Max input (tokens)</th>
+              <th class="text-end">Native window</th>
+              <th class="text-end">Size</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for m in models %}
+            <tr>
+              <td><code>{{ m.id }}</code></td>
+              <td class="text-end">{{ '{:,}'.format(m.max_input_tokens) if m.max_input_tokens else '—' }}</td>
+              <td class="text-end">{{ '{:,}'.format(m.native_context_length) if m.native_context_length else '—' }}</td>
+              <td class="text-end">{{ m.size_gb ~ ' GB' if m.size_gb else '—' }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <p class="mb-0 text-muted small">
+        Names ending <code>:cloud</code> run off-box and are not limited by local
+        GPU memory. Everything else runs on local hardware and is shared, so
+        expect queueing under concurrent load.
+      </p>
+      {% else %}
+      <div class="alert alert-warning mb-0">
+        Model list unavailable — the proxy did not respond. Query
+        <code>GET {{ public_base }}/v1/models</code> directly.
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- 6. CAPTURED -->
+  <div class="card mb-4" id="captured">
+    <div class="card-header"><h2 class="h5 mb-0">6. What gets captured</h2></div>
+    <div class="card-body">
+      <p>
+        Two separate tiers. The first needs nothing from you beyond a valid key;
+        the second only exists if your client implements it.
+      </p>
+
+      <h3 class="h6 mt-3">Automatic &mdash; every request, any client</h3>
+      <p class="text-muted small">
+        Derived from the request and response at the proxy and visible under
+        <a href="/usage">Usage</a>.
+      </p>
+      <ul>
+        <li>Account attribution, model and routing tier</li>
+        <li>Prompt / completion / total tokens, duration, cost</li>
+        <li><code>stop_reason</code>, tools offered, tools actually called, tool round</li>
+        <li>A short query summary, messages sent, messages dropped to fit context</li>
+        <li>Upstream errors, and recovery when a model emits a malformed tool call</li>
+        <li>Full tool-call arguments and results, when the operator enables
+            <code>CAPTURE_TOOL_DETAILS</code> (secrets scrubbed, fields size-capped)</li>
+      </ul>
+
+      <h3 class="h6 mt-4">Client-side &mdash; only if you send it</h3>
+      <p class="text-muted small">
+        These power <a href="/admin/insights">Insights</a> and
+        <a href="/admin/traces">Traces</a>. They are produced by the Vivus CLI,
+        not by the proxy, so a third-party client generates none of them unless
+        it posts them itself (see <a href="#telemetry">section 7</a>).
+      </p>
+      <ul class="mb-0">
+        <li>Product events — commands used, skills loaded, errors, session lifecycle</li>
+        <li>OpenTelemetry spans and prompt text</li>
+        <li>User feedback and shared transcripts</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- 7. TELEMETRY -->
+  <div class="card mb-4" id="telemetry">
+    <div class="card-header"><h2 class="h5 mb-0">7. Optional: product telemetry</h2></div>
+    <div class="card-body">
+      <p>
+        Only needed if you want your client's activity in Insights and Traces
+        alongside the CLI's. Inference works fine without any of this.
+      </p>
+
+      <h3 class="h6">Events</h3>
+      <p><code>POST /api/event_logging/batch</code> — same <code>x-api-key</code>. Returns <code>202</code>; fire-and-forget.</p>
+<pre class="bg-dark text-light p-3 rounded"><code>{
+  "client": "acme-integration",
+  "run_id": "550e8400-e29b-41d4-a716-446655440000",
+  "user_id": "&lt;stable device or install id&gt;",
+  "events": [
+    { "event": "my_app_task_started",
+      "timestamp": "2026-10-30T12:00:00Z",
+      "metadata": { "task": "refactor" } }
+  ]
+}</code></pre>
+      <p class="text-muted small">Batches are capped at 500 events per request.</p>
+
+      <h3 class="h6 mt-4">Traces</h3>
+      <p class="mb-0">
+        <code>POST /v1/traces</code> and <code>POST /v1/logs</code> accept
+        <strong>OTLP/JSON</strong>. Point any OpenTelemetry HTTP exporter at
+        <code>{{ public_base }}</code> with the API key as a header. Responses are
+        always success so the exporter never blocks your app.
+      </p>
+    </div>
+  </div>
+
+  <!-- 8. ERRORS -->
+  <div class="card mb-4" id="errors">
+    <div class="card-header"><h2 class="h5 mb-0">8. Errors &amp; limits</h2></div>
+    <div class="card-body">
+      <table class="table table-sm">
+        <thead><tr><th>Status</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr><td><code>401</code></td><td>Missing, revoked or unknown API key, or the account is disabled</td></tr>
+          <tr><td><code>413</code></td><td>Request body too large (64 MiB cap on inference)</td></tr>
+          <tr><td><code>502</code> / <code>504</code></td><td>Upstream model unavailable or timed out</td></tr>
+        </tbody>
+      </table>
+      <div class="alert alert-info mb-0">
+        <strong>Local models are shared hardware.</strong> Requests that exceed a
+        model's <code>max input</code> are trimmed to fit rather than rejected, and
+        a cold model can take 30&ndash;90s to load before the first token. Set
+        generous client timeouts — 10 minutes is reasonable for long prompts.
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

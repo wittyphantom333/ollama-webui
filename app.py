@@ -1085,6 +1085,34 @@ def api_generate():
 def help_page():
     return render_template('help.html')
 
+
+@app.route('/docs')
+@login_required
+def integration_docs():
+    """API integration guide for teams pointing their own clients at Vivus.
+
+    The model table is read live from the proxy rather than written into the
+    template — a hardcoded list of models and context limits goes stale the
+    first time someone pulls a model or a ceiling is re-measured.
+    """
+    proxy_url = os.getenv('PROXY_BASE_URL', 'http://127.0.0.1:4089').rstrip('/')
+    models = []
+    try:
+        response = requests.get(f'{proxy_url}/v1/models', timeout=OLLAMA_META_TIMEOUT)
+        response.raise_for_status()
+        for m in response.json().get('data', []):
+            models.append({
+                'id': m.get('id'),
+                'max_input_tokens': m.get('max_input_tokens'),
+                'native_context_length': m.get('native_context_length'),
+                'size_gb': m.get('size_gb'),
+            })
+        models.sort(key=lambda m: (m['id'] or ''))
+    except (requests.RequestException, ValueError, KeyError) as exc:
+        app.logger.warning('Proxy model list unavailable for /docs: %s', exc)
+    public_base = os.getenv('PUBLIC_PROXY_URL', 'https://proxy.vivus.ai').rstrip('/')
+    return render_template('docs.html', models=models, public_base=public_base)
+
 @app.route('/model_help')
 def model_help():
     return render_template('model_help.html')
