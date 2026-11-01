@@ -165,7 +165,13 @@
           <tbody>
             {% for m in models %}
             <tr>
-              <td><code>{{ m.id }}</code></td>
+              <td>
+                <div class="fw-semibold text-break">{{ m.display_name }}</div>
+                <code>{{ m.id }}</code>
+                {% if m.description %}
+                <div class="small text-muted text-break">{{ m.description }}</div>
+                {% endif %}
+              </td>
               <td class="text-end">{{ '{:,}'.format(m.max_input_tokens) if m.max_input_tokens else '—' }}</td>
               <td class="text-end">{{ '{:,}'.format(m.native_context_length) if m.native_context_length else '—' }}</td>
               <td class="text-end">{{ m.size_gb ~ ' GB' if m.size_gb else '—' }}</td>

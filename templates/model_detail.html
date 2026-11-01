@@ -1,9 +1,15 @@
 {% extends "base.html" %}
 
-{% block title %}WebOllama - {{ model_name }}{% endblock %}
+{% block title %}WebOllama - {{ model_display_metadata.get(model_name, {}).get('display_name') or model_name }}{% endblock %}
 
 {% block extra_css %}
 <style>
+    @media (max-width: 992px) {
+        .content-wrapper {
+            margin-left: 0;
+        }
+    }
+
     #deleteConfirmModal {
         z-index: 2000 !important;
         position: absolute !important;
@@ -88,12 +94,13 @@
 </div>
 
 <div class="container">
+    {% set display = model_display_metadata.get(model_name, {}) %}
     <div class="row mb-4">
         <div class="col-12">
             <nav aria-label="breadcrumb">
                 <ol class="breadcrumb">
                     <li class="breadcrumb-item"><a href="/models">Models</a></li>
-                    <li class="breadcrumb-item active">{{ model_name }}</li>
+                    <li class="breadcrumb-item active">{{ display.get('display_name') or model_name }}</li>
                 </ol>
             </nav>
         </div>
@@ -102,9 +109,9 @@
     <div class="row mb-4">
         <div class="col-12">
             <div class="card">
-                <div class="card-header d-flex justify-content-between align-items-center">
-                    <h2 class="mb-0">{{ model_name }}</h2>
-                    <div>
+                <div class="card-header d-flex flex-wrap gap-2 justify-content-between align-items-center">
+                    <h2 class="h4 mb-0 text-break">{{ display.get('display_name') or model_name }}</h2>
+                    <div class="d-flex flex-wrap gap-2">
                         <a href="/chat?model={{ model_name }}" class="btn btn-primary me-2">
                             <i class="fas fa-comments me-2"></i> Chat
                         </a>
@@ -119,6 +126,33 @@
                     </div>
                 </div>
                 <div class="card-body">
+                    {% if current_user.has_permission('manage_models') %}
+                    <form id="display-metadata" action="{{ url_for('update_model_display', model_name=model_name) }}" method="POST" class="border-bottom pb-4 mb-4">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <h3 class="h5">Display Settings</h3>
+                        <div class="mb-3">
+                            <label class="form-label">Model ID</label>
+                            <div class="text-break"><code>{{ model_name }}</code></div>
+                        </div>
+                        <div class="mb-3">
+                            <label for="display_name" class="form-label">Display Name</label>
+                            <input id="display_name" name="display_name" type="text" class="form-control" maxlength="120" value="{{ display.get('display_name', '') }}" placeholder="{{ model_name }}">
+                        </div>
+                        <div class="mb-3">
+                            <label for="description" class="form-label">Details</label>
+                            <textarea id="description" name="description" class="form-control" rows="3" maxlength="2000">{{ display.get('description', '') }}</textarea>
+                        </div>
+                        <button type="submit" class="btn btn-primary"><i class="fas fa-save me-2"></i>Save</button>
+                        <button type="submit" name="reset" value="1" class="btn btn-outline-secondary ms-2"><i class="fas fa-undo me-2"></i>Reset</button>
+                    </form>
+                    {% else %}
+                    {% if display.get('display_name') %}
+                    <p class="text-break"><code>{{ model_name }}</code></p>
+                    {% endif %}
+                    {% if display.get('description') %}
+                    <p class="text-break" style="white-space: pre-wrap">{{ display.description }}</p>
+                    {% endif %}
+                    {% endif %}
                     {% if model.details %}
                     <h4>Model Details</h4>
                     <div class="table-responsive mb-4">

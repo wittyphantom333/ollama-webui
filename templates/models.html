@@ -176,10 +176,17 @@
                         {% for model in models %}
                         <tr>
                             <td>
-                                <a href="/models/{{ model.name|urlencode }}" class="text-decoration-none">{{ model.name }}</a>
+                                {% set display = model_display_metadata.get(model.name, {}) %}
+                                <a href="/models/{{ model.name|urlencode }}" class="text-decoration-none">{{ display.get('display_name') or model.name }}</a>
                                 {% if model.name in unlisted %}
                                 <span class="badge bg-secondary ms-2" data-bs-toggle="tooltip"
                                       title="Hidden from /v1/models, the model picker and the integration docs. Still answers if called by name.">unlisted</span>
+                                {% endif %}
+                                {% if display.get('display_name') %}
+                                <div class="small text-muted"><code>{{ model.name }}</code></div>
+                                {% endif %}
+                                {% if display.get('description') %}
+                                <div class="small text-muted text-break">{{ display.description|truncate(180) }}</div>
                                 {% endif %}
                             </td>
                             <td>{{ (model.size / (1024*1024))|round(1) }} MB</td>
@@ -203,6 +210,9 @@
                                     </form>
                                     <a href="/models/update/{{ model.name|urlencode }}" class="btn btn-sm btn-outline-success me-2" data-bs-toggle="tooltip" title="Update model">
                                         <i class="fas fa-sync-alt"></i>
+                                    </a>
+                                    <a href="{{ url_for('model_detail', model_name=model.name, _anchor='display-metadata') }}" class="btn btn-sm btn-outline-secondary me-2" data-bs-toggle="tooltip" title="Edit display name and details" aria-label="Edit display name and details">
+                                        <i class="fas fa-pen"></i>
                                     </a>
                                     <form action="/models/visibility/{{ model.name|urlencode }}" method="POST" class="d-inline">
                                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

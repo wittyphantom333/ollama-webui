@@ -214,6 +214,46 @@ class SiteSettings(db.Model):
         row.value = str(value)
         db.session.commit()
 
+    @staticmethod
+    def get_model_display_metadata():
+        import json
+        try:
+            data = json.loads(SiteSettings.get('model_display_metadata', '{}'))
+        except (ValueError, TypeError):
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        return {
+            name: {
+                field: values[field]
+                for field in ('display_name', 'description')
+                if isinstance(values.get(field), str)
+            }
+            for name, values in data.items()
+            if isinstance(name, str) and isinstance(values, dict)
+        }
+
+    @staticmethod
+    def set_model_display_metadata(model_name, display_name, description):
+        import json
+        display_name = display_name.strip()
+        description = description.strip()
+        if len(display_name) > 120:
+            raise ValueError('Display name must be 120 characters or fewer.')
+        if len(description) > 2000:
+            raise ValueError('Details must be 2000 characters or fewer.')
+        metadata = SiteSettings.get_model_display_metadata()
+        values = {}
+        if display_name:
+            values['display_name'] = display_name
+        if description:
+            values['description'] = description
+        if values:
+            metadata[model_name] = values
+        else:
+            metadata.pop(model_name, None)
+        SiteSettings.set('model_display_metadata', json.dumps(metadata))
+
 
 class CloudProvider(db.Model):
     """Cloud LLM provider API keys (OpenAI, Anthropic, Gemini, etc.)."""

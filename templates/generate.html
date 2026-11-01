@@ -259,7 +259,7 @@
                         <select class="form-select" id="model-select" size="5">
                             <option value="" disabled selected>Select a model</option>
                             {% for model in models %}
-                            <option value="{{ model.name }}" {% if request.args.get('model') == model.name %}selected{% endif %}>{{ model.name }}</option>
+                            <option value="{{ model.name }}" {% if request.args.get('model') == model.name %}selected{% endif %}>{{ model_display_metadata.get(model.name, {}).get('display_name') or model.name }}</option>
                             {% endfor %}
                         </select>
                     </div>

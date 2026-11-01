@@ -314,6 +314,11 @@ def index():
     current_version = (version_data or {}).get('version', 'Unknown')
     return render_template('index.html', version=current_version)
 
+@app.context_processor
+def model_display_context():
+    from models import SiteSettings
+    return {'model_display_metadata': SiteSettings.get_model_display_metadata()}
+
 @app.route('/models')
 @login_required
 def models():
@@ -408,6 +413,34 @@ def get_unlisted_models():
         return set(value) if isinstance(value, list) else set()
     except (ValueError, TypeError):
         return set()
+
+
+@app.route('/models/display/<path:model_name>', methods=['POST'])
+@login_required
+def update_model_display(model_name):
+    if not current_user.has_permission('manage_models'):
+        flash('You do not have permission to manage models.', 'danger')
+        return redirect(url_for('models'))
+    models_data = cached_ollama('/tags')
+    if models_data is None:
+        flash('The model list is currently unavailable.', 'warning')
+        return redirect(url_for('models'))
+    if not any(model.get('name') == model_name for model in models_data.get('models', [])):
+        flash('Model not found.', 'danger')
+        return redirect(url_for('models'))
+    from models import SiteSettings
+    reset = request.form.get('reset') == '1'
+    try:
+        SiteSettings.set_model_display_metadata(
+            model_name,
+            '' if reset else request.form.get('display_name', ''),
+            '' if reset else request.form.get('description', ''),
+        )
+    except ValueError as error:
+        flash(str(error), 'danger')
+    else:
+        flash('Model display settings saved.', 'success')
+    return redirect(url_for('model_detail', model_name=model_name, _anchor='display-metadata'))
 
 
 @app.route('/models/visibility/<path:model_name>', methods=['POST'])
@@ -1145,11 +1178,13 @@ def integration_docs():
         for m in response.json().get('data', []):
             models.append({
                 'id': m.get('id'),
+                'display_name': m.get('label') or m.get('display_name') or m.get('id'),
+                'description': m.get('description') or '',
                 'max_input_tokens': m.get('max_input_tokens'),
                 'native_context_length': m.get('native_context_length'),
                 'size_gb': m.get('size_gb'),
             })
-        models.sort(key=lambda m: (m['id'] or ''))
+        models.sort(key=lambda m: (m['display_name'] or ''))
     except (requests.RequestException, ValueError, KeyError) as exc:
         app.logger.warning('Proxy model list unavailable for /docs: %s', exc)
     public_base = os.getenv('PUBLIC_PROXY_URL', 'https://proxy.vivus.ai').rstrip('/')

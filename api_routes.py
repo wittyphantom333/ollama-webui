@@ -2714,4 +2714,7 @@ def model_visibility():
             unlisted = []
     except (ValueError, TypeError):
         unlisted = []
-    return jsonify({'unlisted': unlisted})
+    return jsonify({
+        'unlisted': unlisted,
+        'display_metadata': SiteSettings.get_model_display_metadata(),
+    })
