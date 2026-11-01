@@ -257,11 +257,57 @@
       <p class="text-muted small">Batches are capped at 500 events per request.</p>
 
       <h3 class="h6 mt-4">Traces</h3>
+      <p>
+        The collector is available at <code>{{ public_base }}</code> and accepts
+        <strong>OTLP/JSON over HTTP</strong> with
+        <code>Content-Type: application/json</code>. Send your Vivus API key in
+        <code>x-api-key</code> to attribute records to your account.
+      </p>
+      <div class="table-responsive">
+        <table class="table table-sm">
+          <thead><tr><th>Endpoint</th><th>JSON Envelope</th><th>Storage</th></tr></thead>
+          <tbody>
+            <tr><td><code>POST /v1/traces</code></td><td><code>resourceSpans</code> containing <code>scopeSpans[].spans[]</code></td><td>Stored in the portal trace viewer</td></tr>
+            <tr><td><code>POST /v1/logs</code></td><td><code>resourceLogs</code> containing <code>scopeLogs[].logRecords[]</code></td><td>Stored in the portal trace viewer</td></tr>
+            <tr><td><code>POST /v1/metrics</code></td><td><code>resourceMetrics</code></td><td>Acknowledged but not stored; inference usage is collected separately</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        <strong>Protobuf and gRPC are not supported by this receiver.</strong>
+        Many Python OTLP HTTP exporters send <code>http/protobuf</code> by
+        default; changing their base URL alone is not sufficient. Use an
+        exporter that supports <code>http/json</code>, or serialize the OTLP JSON
+        envelope explicitly. A custom turn record without that envelope will
+        not produce a stored span.
+      </p>
+      <p>A minimal trace export:</p>
+<pre class="bg-dark text-light p-3 rounded"><code>{
+  "resourceSpans": [{
+    "resource": {"attributes": [
+      {"key": "service.name", "value": {"stringValue": "external-agent"}},
+      {"key": "session.id", "value": {"stringValue": "conversation-123"}}
+    ]},
+    "scopeSpans": [{
+      "scope": {"name": "external-agent"},
+      "spans": [{
+        "traceId": "550e8400e29b41d4a716446655440000",
+        "spanId": "a716446655440000",
+        "name": "agent.turn",
+        "startTimeUnixNano": "1793534400000000000",
+        "endTimeUnixNano": "1793534401000000000",
+        "status": {"code": 1}
+      }]
+    }]
+  }]
+}</code></pre>
       <p class="mb-0">
-        <code>POST /v1/traces</code> and <code>POST /v1/logs</code> accept
-        <strong>OTLP/JSON</strong>. Point any OpenTelemetry HTTP exporter at
-        <code>{{ public_base }}</code> with the API key as a header. Responses are
-        always success so the exporter never blocks your app.
+        Traces and logs appear under <a href="/admin/traces">Traces</a> for
+        admins. The proxy forwards exports asynchronously and returns success
+        immediately, even if downstream parsing or storage fails. Verify a
+        unique <code>traceId</code> in the viewer rather than treating HTTP 200
+        as proof of ingestion. Put <code>session.id</code> on resource or span
+        attributes to group records by conversation.
       </p>
     </div>
   </div>
